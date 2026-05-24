@@ -1,4 +1,11 @@
-import { Events, EmbedBuilder, MessageFlags } from 'discord.js';
+import {
+  Events,
+  EmbedBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  MessageFlags,
+} from 'discord.js';
 
 export default {
   name: Events.InteractionCreate,
@@ -21,7 +28,7 @@ export default {
 
     const customId = interaction.customId;
 
-    // ── Setup panel: buttons, selects, modals ──────────────────────────────────
+    // ── Setup panel ────────────────────────────────────────────────────────────
     if (customId?.startsWith('setup_')) {
       const setup = client.commands.get('setup');
       if (setup?.handleComponent) {
@@ -38,23 +45,95 @@ export default {
       return;
     }
 
-    // ── .loot role inspect select menu ────────────────────────────────────────
-    if (customId === 'loot_role_select') {
+    // ── .loot equip/unequip select menu ───────────────────────────────────────
+    if (customId?.startsWith('loot_toggle_')) {
+      const userId = customId.split('_')[2];
+
+      // Only the user who ran .loot can use their own panel
+      if (interaction.user.id !== userId) {
+        return interaction.reply({ content: '⛔ This isn\'t your loot panel!', flags: MessageFlags.Ephemeral });
+      }
+
       const roleId  = interaction.values[0];
-      const role    = interaction.guild.roles.cache.get(roleId);
-      const hasRole = interaction.member.roles.cache.has(roleId);
+      const guildId = interaction.guild.id;
+      const coll    = client.config.getUserCollection(guildId, userId);
+      const member  = interaction.guild.members.cache.get(userId)
+                   ?? await interaction.guild.members.fetch(userId).catch(() => null);
+
+      const isEquipped = coll.equipped.includes(roleId);
+
+      if (isEquipped) {
+        client.config.unequipRole(guildId, userId, roleId);
+        await member?.roles.remove(roleId).catch(() => {});
+      } else {
+        client.config.equipRole(guildId, userId, roleId);
+        await member?.roles.add(roleId).catch(() => {});
+      }
+
+      // Rebuild the loot panel with updated state
+      const cfg     = client.config.get(guildId);
+      const roleIds = cfg.rewardRoleIds ?? [];
+      const updatedColl = client.config.getUserCollection(guildId, userId);
+      const owned    = new Set(updatedColl.owned);
+      const equipped = new Set(updatedColl.equipped);
+
+      const unlocked = [];
+      const locked   = [];
+
+      for (const rid of roleIds) {
+        const role = interaction.guild.roles.cache.get(rid);
+        if (!role) continue;
+        if (owned.has(rid)) unlocked.push({ role, roleId: rid });
+        else                locked.push({ role, roleId: rid });
+      }
+
+      const lines = [];
+      if (unlocked.length) {
+        lines.push('**✨ Unlocked**');
+        for (const { role, roleId: rid } of unlocked) {
+          lines.push(`${equipped.has(rid) ? '✅' : '🔓'} <@&${rid}>`);
+        }
+        if (locked.length) lines.push('');
+      }
+      if (locked.length) {
+        lines.push('**Locked**');
+        for (const { role } of locked) lines.push(`🔒 \`${role.name}\``);
+      }
+
+      const total      = unlocked.length + locked.length;
+      const allPercent = total ? Math.round((unlocked.length / total) * 100) : 0;
 
       const embed = new EmbedBuilder()
-        .setColor(hasRole ? (role?.color || 0x57F287) : 0x808080)
-        .setTitle(hasRole ? `🔓 ${role?.name ?? 'Unknown Role'}` : `🔒 ${role?.name ?? 'Unknown Role'}`)
-        .setDescription(
-          hasRole
-            ? `✅ You have unlocked **${role?.name}**!\n\nYou earned this by winning a game.`
-            : `🔒 You haven't unlocked **${role?.name}** yet.\n\nWin a game — you have a **1 in 5 (20%)** chance to earn a random role from the pool.`
+        .setColor(
+          unlocked.length === total && total > 0 ? 0xFFD700
+          : unlocked.length > 0 ? 0x57F287
+          : 0x5865F2
         )
-        .setFooter({ text: 'Keep playing to unlock more!' });
+        .setTitle(`🎁 ${interaction.user.username}'s Loot`)
+        .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `${unlocked.length}/${total} unlocked (${allPercent}%) • Win games for a 1/5 chance to earn a role` })
+        .setTimestamp();
 
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      const rows = [];
+      if (unlocked.length) {
+        const options = unlocked.map(({ role, roleId: rid }) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(role.name)
+            .setValue(rid)
+            .setEmoji(equipped.has(rid) ? '✅' : '📦')
+            .setDescription(equipped.has(rid) ? '✅ Equipped — select to remove' : '📦 Owned — select to equip')
+        );
+        rows.push(new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`loot_toggle_${userId}`)
+            .setPlaceholder('🔧 Equip / Unequip a role...')
+            .setMinValues(1).setMaxValues(1)
+            .addOptions(options),
+        ));
+      }
+
+      return interaction.update({ embeds: [embed], components: rows });
     }
 
     // ── Game buttons / selects ─────────────────────────────────────────────────

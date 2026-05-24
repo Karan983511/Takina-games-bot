@@ -15,6 +15,9 @@ if (!process.env.CLIENT_ID) {
   console.error('[ERROR] CLIENT_ID is missing from .env!');
   process.exit(1);
 }
+if (!process.env.MONGODB_URI) {
+  console.error('[ERROR] MONGODB_URI is missing from .env! Config will not persist across restarts.');
+}
 
 // ─── Create client ─────────────────────────────────────────────────────────────
 const client = new Client({
@@ -27,11 +30,9 @@ const client = new Client({
 });
 
 // ─── Attach shared state ───────────────────────────────────────────────────────
-client.commands    = new Collection();
-client.config      = new ConfigService();
-client.scheduler   = new GameScheduler(client);
-
-// channelId → timestamp of last user message (used to find active channels)
+client.commands       = new Collection();
+client.config         = new ConfigService();
+client.scheduler      = new GameScheduler(client);
 client.recentActivity = new Map();
 
 client.rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -39,6 +40,10 @@ client.rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 // ─── Boot ──────────────────────────────────────────────────────────────────────
 async function start() {
   try {
+    // Connect to MongoDB and pre-load all guild configs before anything else
+    console.log('[Takina Games] Connecting to MongoDB...');
+    await client.config.connect();
+
     console.log('[Takina Games] Loading commands...');
     await loadCommands(client);
 

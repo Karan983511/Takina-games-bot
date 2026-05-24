@@ -6,6 +6,12 @@ import {
   StringSelectMenuOptionBuilder,
 } from 'discord.js';
 
+/** Returns the role's emoji string (unicode or custom) or empty string. */
+function getRoleEmoji(role) {
+  if (role.unicodeEmoji) return role.unicodeEmoji;
+  return '';
+}
+
 export default {
   name: Events.MessageCreate,
   async execute(message, client) {
@@ -28,8 +34,8 @@ export default {
         });
       }
 
-      const coll = client.config.getUserCollection(message.guild.id, message.author.id);
-      const owned = new Set(coll.owned);
+      const coll     = client.config.getUserCollection(message.guild.id, message.author.id);
+      const owned    = new Set(coll.owned);
       const equipped = new Set(coll.equipped);
 
       const unlocked = [];
@@ -38,25 +44,26 @@ export default {
       for (const roleId of roleIds) {
         const role = message.guild.roles.cache.get(roleId);
         if (!role) continue;
-        const isOwned = owned.has(roleId);
-        if (isOwned) unlocked.push({ role, roleId });
-        else         locked.push({ role, roleId });
+        if (owned.has(roleId)) unlocked.push({ role, roleId });
+        else                   locked.push({ role, roleId });
       }
 
-      // ── Build description ─────────────────────────────────────────────────────
+      // ── Build description ──────────────────────────────────────────────────
       const lines = [];
       if (unlocked.length) {
         lines.push('**✨ Unlocked**');
         for (const { role, roleId } of unlocked) {
+          const emoji     = getRoleEmoji(role);
           const indicator = equipped.has(roleId) ? '✅' : '🔓';
-          lines.push(`${indicator} <@&${roleId}>`);
+          lines.push(`${indicator} ${emoji} <@&${roleId}>`.trimEnd());
         }
         if (locked.length) lines.push('');
       }
       if (locked.length) {
         lines.push('**Locked**');
-        for (const { role } of locked) {
-          lines.push(`🔒 \`${role.name}\``);
+        for (const { role, roleId } of locked) {
+          const emoji = getRoleEmoji(role);
+          lines.push(`🔒 ${emoji} \`${role.name}\``.replace('  ', ' '));
         }
       }
 
@@ -64,7 +71,11 @@ export default {
       const allPercent = total ? Math.round((unlocked.length / total) * 100) : 0;
 
       const embed = new EmbedBuilder()
-        .setColor(unlocked.length === total && total > 0 ? 0xFFD700 : unlocked.length > 0 ? 0x57F287 : 0x5865F2)
+        .setColor(
+          unlocked.length === total && total > 0 ? 0xFFD700
+          : unlocked.length > 0 ? 0x57F287
+          : 0x5865F2
+        )
         .setTitle(`🎁 ${message.author.username}'s Loot`)
         .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
         .setDescription(lines.join('\n'))
@@ -73,21 +84,22 @@ export default {
         })
         .setTimestamp();
 
-      // ── Select menu: equip / unequip ──────────────────────────────────────────────────
+      // ── Select menu: equip / unequip ───────────────────────────────────────
       const rows = [];
       if (unlocked.length) {
         const options = unlocked.map(({ role, roleId }) => {
           const isEquipped = equipped.has(roleId);
-          return new StringSelectMenuOptionBuilder()
+          const opt = new StringSelectMenuOptionBuilder()
             .setLabel(role.name)
             .setValue(roleId)
             .setEmoji(isEquipped ? '✅' : '📦')
             .setDescription(isEquipped ? '✅ Equipped — select to remove' : '📦 Owned — select to equip');
+          return opt;
         });
         rows.push(new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`loot_toggle_${message.author.id}`)
-            .setPlaceholder('🔧 Equip / Unequip a role...')
+            .setPlaceholder('⚖️ Equip / Unequip a role...')
             .setMinValues(1).setMaxValues(1)
             .addOptions(options),
         ));

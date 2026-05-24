@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 
-// ─── Schema ────────────────────────────────────────────────────────────────────
+// ─── Schemas ───────────────────────────────────────────────────────────────────
+
 const GuildConfigSchema = new mongoose.Schema(
   {
     guildId:            { type: String, required: true, unique: true },
@@ -11,21 +12,36 @@ const GuildConfigSchema = new mongoose.Schema(
     maxInterval:        { type: Number,  default: 20 },
     gameTimeoutSeconds: { type: Number,  default: 30 },
     games: {
-      flag:           { type: Boolean, default: true },
-      wordBackwards:  { type: Boolean, default: true },
-      buttonRace:     { type: Boolean, default: true },
-      colorPicker:    { type: Boolean, default: true },
-      math:           { type: Boolean, default: true },
-      trivia:         { type: Boolean, default: true },
-      wouldYouRather: { type: Boolean, default: true },
+      flag:            { type: Boolean, default: true },
+      wordBackwards:   { type: Boolean, default: true },
+      buttonRace:      { type: Boolean, default: true },
+      colorPicker:     { type: Boolean, default: true },
+      math:            { type: Boolean, default: true },
+      trivia:          { type: Boolean, default: true },
+      wouldYouRather:  { type: Boolean, default: true },
+      numberSequence:  { type: Boolean, default: true },
     },
   },
   { timestamps: true }
 );
 
-const GuildConfig = mongoose.model('GuildConfig', GuildConfigSchema);
+// Per-user role collection: which roles they've won and which are equipped
+const UserCollectionSchema = new mongoose.Schema(
+  {
+    guildId:  { type: String, required: true },
+    userId:   { type: String, required: true },
+    owned:    { type: [String], default: [] },   // role IDs they've earned
+    equipped: { type: [String], default: [] },   // subset currently worn
+  },
+  { timestamps: true }
+);
+UserCollectionSchema.index({ guildId: 1, userId: 1 }, { unique: true });
+
+const GuildConfig    = mongoose.model('GuildConfig',    GuildConfigSchema);
+const UserCollection = mongoose.model('UserCollection', UserCollectionSchema);
 
 // ─── Defaults ──────────────────────────────────────────────────────────────────
+
 function defaultConfig(guildId) {
   return {
     guildId,
@@ -37,21 +53,18 @@ function defaultConfig(guildId) {
     gameTimeoutSeconds: 30,
     games: {
       flag: true, wordBackwards: true, buttonRace: true,
-      colorPicker: true, math: true, trivia: true, wouldYouRather: true,
+      colorPicker: true, math: true, trivia: true,
+      wouldYouRather: true, numberSequence: true,
     },
   };
 }
 
-/** Merge stored data with defaults so missing fields are always present. */
 function normalize(guildId, data = {}) {
   const def = defaultConfig(guildId);
-
-  // Migrate legacy single rewardRoleId → array
   if (data.rewardRoleId !== undefined) {
     data.rewardRoleIds = data.rewardRoleId ? [data.rewardRoleId] : [];
     delete data.rewardRoleId;
   }
-
   return {
     ...def,
     ...data,
@@ -64,35 +77,41 @@ function normalize(guildId, data = {}) {
 }
 
 // ─── ConfigService ─────────────────────────────────────────────────────────────
+
 export class ConfigService {
   constructor() {
-    /**
-     * In-memory cache: guildId → plain config object.
-     * All getters/setters are synchronous against the cache.
-     * MongoDB writes happen asynchronously in the background.
-     */
-    this._cache = new Map();
+    this._cache     = new Map(); // guildId → guild config
+    this._userCache = new Map(); // `${guildId}:${userId}` → { owned, equipped }
   }
 
-  /** Call once at startup — connects and pre-loads all guild configs. */
+  /** Connect to MongoDB and pre-load all data. */
   async connect() {
     const uri = process.env.MONGODB_URI;
     if (!uri) {
       console.error('[ConfigService] MONGODB_URI is not set! Config will not persist.');
       return;
     }
-
     await mongoose.connect(uri, { serverSelectionTimeoutMS: 10_000 });
 
-    const docs = await GuildConfig.find({}).lean();
-    for (const doc of docs) {
+    const [guildDocs, userDocs] = await Promise.all([
+      GuildConfig.find({}).lean(),
+      UserCollection.find({}).lean(),
+    ]);
+
+    for (const doc of guildDocs) {
       this._cache.set(doc.guildId, normalize(doc.guildId, doc));
     }
+    for (const doc of userDocs) {
+      this._userCache.set(`${doc.guildId}:${doc.userId}`, {
+        owned:    doc.owned    ?? [],
+        equipped: doc.equipped ?? [],
+      });
+    }
 
-    console.log(`[ConfigService] ✅ Connected to MongoDB — ${docs.length} guild config(s) loaded`);
+    console.log(`[ConfigService] ✅ Connected to MongoDB — ${guildDocs.length} guild(s), ${userDocs.length} user collection(s) loaded`);
   }
 
-  // ── Synchronous API (same surface as the old JSON version) ─────────────────
+  // ── Guild config ───────────────────────────────────────────────────────────
 
   get(guildId) {
     if (!this._cache.has(guildId)) {
@@ -109,24 +128,6 @@ export class ConfigService {
     this._cache.set(guildId, updated);
     this._persist(guildId).catch(() => {});
     return updated;
-  }
-
-  addRewardRole(guildId, roleId) {
-    const cfg = this.get(guildId);
-    if (!cfg.rewardRoleIds.includes(roleId)) {
-      cfg.rewardRoleIds.push(roleId);
-      this._cache.set(guildId, cfg);
-      this._persist(guildId).catch(() => {});
-    }
-    return cfg;
-  }
-
-  removeRewardRole(guildId, roleId) {
-    const cfg = this.get(guildId);
-    cfg.rewardRoleIds = cfg.rewardRoleIds.filter(id => id !== roleId);
-    this._cache.set(guildId, cfg);
-    this._persist(guildId).catch(() => {});
-    return cfg;
   }
 
   setGame(guildId, gameKey, enabled) {
@@ -149,18 +150,60 @@ export class ConfigService {
     GuildConfig.deleteOne({ guildId }).catch(() => {});
   }
 
+  // ── User collections ───────────────────────────────────────────────────────
+
+  getUserCollection(guildId, userId) {
+    const key = `${guildId}:${userId}`;
+    if (!this._userCache.has(key)) {
+      this._userCache.set(key, { owned: [], equipped: [] });
+    }
+    return this._userCache.get(key);
+  }
+
+  addOwnedRole(guildId, userId, roleId) {
+    const coll = this.getUserCollection(guildId, userId);
+    if (!coll.owned.includes(roleId)) {
+      coll.owned.push(roleId);
+      this._persistUser(guildId, userId).catch(() => {});
+    }
+    return coll;
+  }
+
+  equipRole(guildId, userId, roleId) {
+    const coll = this.getUserCollection(guildId, userId);
+    if (coll.owned.includes(roleId) && !coll.equipped.includes(roleId)) {
+      coll.equipped.push(roleId);
+      this._persistUser(guildId, userId).catch(() => {});
+    }
+    return coll;
+  }
+
+  unequipRole(guildId, userId, roleId) {
+    const coll = this.getUserCollection(guildId, userId);
+    coll.equipped = coll.equipped.filter(id => id !== roleId);
+    this._persistUser(guildId, userId).catch(() => {});
+    return coll;
+  }
+
   // ── Private ────────────────────────────────────────────────────────────────
 
   async _persist(guildId) {
     const data = this._cache.get(guildId);
     if (!data || !mongoose.connection.readyState) return;
-
-    // Strip Mongoose internals before upserting
     const { _id, __v, createdAt, updatedAt, ...plain } = data;
-
     await GuildConfig.findOneAndUpdate(
       { guildId },
       { $set: plain },
+      { upsert: true, new: true }
+    );
+  }
+
+  async _persistUser(guildId, userId) {
+    if (!mongoose.connection.readyState) return;
+    const coll = this.getUserCollection(guildId, userId);
+    await UserCollection.findOneAndUpdate(
+      { guildId, userId },
+      { $set: { owned: coll.owned, equipped: coll.equipped } },
       { upsert: true, new: true }
     );
   }

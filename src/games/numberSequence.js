@@ -171,8 +171,8 @@ export function buildNumberSequenceGame() {
 // Build a display string like "3-5-?-17-23" or "3-5-8-12-?"
 function buildDisplay(fullSeq, missingIndex) {
   return fullSeq
-    .map((n, i) => (i === missingIndex ? '?' : String(n)))
-    .join('-');
+    .map((n, i) => (i === missingIndex ? '**?**' : String(n)))
+    .join(' - ');
 }
 
 export function buildNumberSequenceEmbed(game) {
@@ -192,7 +192,7 @@ export function buildNumberSequenceEmbed(game) {
 }
 
 export function buildNumberSequenceTimeoutEmbed(game) {
-  const full = game.fullSeq.map((n, i) => i === game.missingIndex ? `**${n}**` : String(n)).join('-');
+  const full = game.fullSeq.map((n, i) => i === game.missingIndex ? `**${n}**` : String(n)).join(' - ');
   return new EmbedBuilder()
     .setColor(0xED4245)
     .setTitle('⏰ Time\'s Up!')
@@ -204,13 +204,13 @@ export function buildNumberSequenceTimeoutEmbed(game) {
 }
 
 export function buildNumberSequenceWinEmbed(winner, game) {
-  const full = game.fullSeq.join('-');
+  const full = game.fullSeq.map((n, i) => i === game.missingIndex ? `**${n}**` : String(n)).join(' - ');
   return new EmbedBuilder()
     .setColor(0x57F287)
     .setTitle('✅ Pattern Solved!')
     .setDescription(
       `**Winner:** ${winner}\n\n` +
-      `**Sequence:** ${full}\n\n` +
+      `**Sequence:** ${full}`
     )
     .setFooter({ text: 'Takina Games' });
 }

@@ -13,6 +13,7 @@ import {
   TextInputStyle,
   ChannelType,
   PermissionFlagsBits,
+  MessageFlags,
 } from 'discord.js';
 
 const GAME_LABELS = {
@@ -23,7 +24,6 @@ const GAME_LABELS = {
   math:           '🧮 Math Quiz',
   trivia:         '🧠 Trivia',
   wouldYouRather: '🤔 Would You Rather',
-  numberSequence: '🔢 Number Sequence',
 };
 
 export const data = new SlashCommandBuilder()
@@ -32,7 +32,7 @@ export const data = new SlashCommandBuilder()
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
 export async function execute(interaction, client) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const cfg = client.config.get(interaction.guild.id);
   await interaction.editReply(buildMainPanel(interaction.guild, cfg));
 }
@@ -88,15 +88,14 @@ export async function handleComponent(interaction, client) {
     let min = parseInt(interaction.fields.getTextInputValue('setup_min_field'), 10);
     let max = parseInt(interaction.fields.getTextInputValue('setup_max_field'), 10);
     if (isNaN(min) || isNaN(max) || min < 1 || max < 1) {
-      return interaction.reply({ content: '❌ Enter valid numbers between 1 and 180.', ephemeral: true });
+      return interaction.reply({ content: '❌ Enter valid numbers between 1 and 180.', flags: MessageFlags.Ephemeral });
     }
     if (min > max) [min, max] = [max, min];
     min = Math.min(min, 180); max = Math.min(max, 180);
     client.config.set(guildId, { minInterval: min, maxInterval: max });
     const cfg = client.config.get(guildId);
     if (cfg.enabled) { client.scheduler.stopGuild(guildId); client.scheduler.startGuild(guildId); }
-    await interaction.deferUpdate();
-    return interaction.message.edit(buildMainPanel(interaction.guild, client.config.get(guildId)));
+    return safeModalUpdate(interaction, buildMainPanel(interaction.guild, client.config.get(guildId)));
   }
 
   // ── Game timeout modal ─────────────────────────────────────────────────────
@@ -123,11 +122,10 @@ export async function handleComponent(interaction, client) {
   if (id === 'setup_timeout_modal') {
     const raw = parseInt(interaction.fields.getTextInputValue('setup_timeout_field'), 10);
     if (isNaN(raw) || raw < 10 || raw > 300) {
-      return interaction.reply({ content: '❌ Enter a number between 10 and 300 seconds.', ephemeral: true });
+      return interaction.reply({ content: '❌ Enter a number between 10 and 300 seconds.', flags: MessageFlags.Ephemeral });
     }
     client.config.set(guildId, { gameTimeoutSeconds: raw });
-    await interaction.deferUpdate();
-    return interaction.message.edit(buildMainPanel(interaction.guild, client.config.get(guildId)));
+    return safeModalUpdate(interaction, buildMainPanel(interaction.guild, client.config.get(guildId)));
   }
 
   // ── Roles view ─────────────────────────────────────────────────────────────
@@ -201,6 +199,22 @@ export async function handleComponent(interaction, client) {
   }
 }
 
+/**
+ * For modal submissions: try to update the original setup panel message.
+ * If it was deleted, send a fresh ephemeral reply instead.
+ */
+async function safeModalUpdate(interaction, payload) {
+  try {
+    await interaction.deferUpdate();
+    await interaction.message.edit(payload);
+  } catch {
+    // Original panel was deleted — send a fresh one
+    try {
+      await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
+    } catch { /* ignore */ }
+  }
+}
+
 // ─── Panel builders ────────────────────────────────────────────────────────────
 
 function buildMainPanel(guild, cfg) {
@@ -219,9 +233,9 @@ function buildMainPanel(guild, cfg) {
     .setTitle('🎮 Takina Games — Setup')
     .setThumbnail(guild.iconURL({ dynamic: true }))
     .addFields(
-      { name: '📡 Status',        value: cfg.enabled ? '✅ Active' : '🔴 Disabled', inline: true },
-      { name: '⏱️ Interval',      value: `${cfg.minInterval}–${cfg.maxInterval} min`, inline: true },
-      { name: '⏰ Answer Time',   value: `${cfg.gameTimeoutSeconds ?? 30}s per game`, inline: true },
+      { name: '📡 Status',      value: cfg.enabled ? '✅ Active' : '🔴 Disabled', inline: true },
+      { name: '⏱️ Interval',    value: `${cfg.minInterval}–${cfg.maxInterval} min`, inline: true },
+      { name: '⏰ Answer Time', value: `${cfg.gameTimeoutSeconds ?? 30}s per game`, inline: true },
       { name: '🎁 Reward Roles (1/5 chance, random)', value: roleList },
       { name: '📌 Game Channels', value: channelList },
       { name: '🎲 Games',         value: gamesList },

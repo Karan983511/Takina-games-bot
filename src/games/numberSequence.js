@@ -211,7 +211,6 @@ export function buildNumberSequenceWinEmbed(winner, game) {
     .setDescription(
       `**Winner:** ${winner}\n\n` +
       `**Sequence:** ${full}\n\n` +
-      `✅ **CONFIRMED Pattern Solved!**`
     )
     .setFooter({ text: 'Takina Games' });
 }

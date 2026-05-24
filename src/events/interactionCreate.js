@@ -7,6 +7,11 @@ import {
   MessageFlags,
 } from 'discord.js';
 
+function getRoleEmoji(role) {
+  if (role.unicodeEmoji) return role.unicodeEmoji;
+  return '';
+}
+
 export default {
   name: Events.InteractionCreate,
   async execute(interaction, client) {
@@ -47,9 +52,8 @@ export default {
 
     // ── .loot equip/unequip select menu ───────────────────────────────────────
     if (customId?.startsWith('loot_toggle_')) {
-      const userId = customId.split('_')[2];
+      const userId = customId.split('_').pop();
 
-      // Only the user who ran .loot can use their own panel
       if (interaction.user.id !== userId) {
         return interaction.reply({ content: '⛔ This isn\'t your loot panel!', flags: MessageFlags.Ephemeral });
       }
@@ -70,12 +74,12 @@ export default {
         await member?.roles.add(roleId).catch(() => {});
       }
 
-      // Rebuild the loot panel with updated state
-      const cfg     = client.config.get(guildId);
-      const roleIds = cfg.rewardRoleIds ?? [];
+      // Rebuild panel with updated state
+      const cfg         = client.config.get(guildId);
+      const roleIds     = cfg.rewardRoleIds ?? [];
       const updatedColl = client.config.getUserCollection(guildId, userId);
-      const owned    = new Set(updatedColl.owned);
-      const equipped = new Set(updatedColl.equipped);
+      const owned       = new Set(updatedColl.owned);
+      const equipped    = new Set(updatedColl.equipped);
 
       const unlocked = [];
       const locked   = [];
@@ -91,13 +95,18 @@ export default {
       if (unlocked.length) {
         lines.push('**✨ Unlocked**');
         for (const { role, roleId: rid } of unlocked) {
-          lines.push(`${equipped.has(rid) ? '✅' : '🔓'} <@&${rid}>`);
+          const emoji     = getRoleEmoji(role);
+          const indicator = equipped.has(rid) ? '✅' : '🔓';
+          lines.push(`${indicator} ${emoji} <@&${rid}>`.trimEnd());
         }
         if (locked.length) lines.push('');
       }
       if (locked.length) {
         lines.push('**Locked**');
-        for (const { role } of locked) lines.push(`🔒 \`${role.name}\``);
+        for (const { role } of locked) {
+          const emoji = getRoleEmoji(role);
+          lines.push(`🔒 ${emoji} \`${role.name}\``.replace('  ', ' '));
+        }
       }
 
       const total      = unlocked.length + locked.length;
@@ -117,17 +126,18 @@ export default {
 
       const rows = [];
       if (unlocked.length) {
-        const options = unlocked.map(({ role, roleId: rid }) =>
-          new StringSelectMenuOptionBuilder()
+        const options = unlocked.map(({ role, roleId: rid }) => {
+          const isEq = equipped.has(rid);
+          return new StringSelectMenuOptionBuilder()
             .setLabel(role.name)
             .setValue(rid)
-            .setEmoji(equipped.has(rid) ? '✅' : '📦')
-            .setDescription(equipped.has(rid) ? '✅ Equipped — select to remove' : '📦 Owned — select to equip')
-        );
+            .setEmoji(isEq ? '✅' : '📦')
+            .setDescription(isEq ? '✅ Equipped — select to remove' : '📦 Owned — select to equip');
+        });
         rows.push(new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`loot_toggle_${userId}`)
-            .setPlaceholder('🔧 Equip / Unequip a role...')
+            .setPlaceholder('⚖️ Equip / Unequip a role...')
             .setMinValues(1).setMaxValues(1)
             .addOptions(options),
         ));

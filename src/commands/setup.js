@@ -17,13 +17,14 @@ import {
 } from 'discord.js';
 
 const GAME_LABELS = {
-  flag:           '🏳️  Flag Guess',
-  wordBackwards:  '🔤 Word Backwards',
-  buttonRace:     '⚡ Button Race',
-  colorPicker:    '🎨 Color Picker',
-  math:           '🧮 Math Quiz',
-  trivia:         '🧠 Trivia',
-  wouldYouRather: '🤔 Would You Rather',
+  flag:            '🏳️  Flag Guess',
+  wordBackwards:   '🔤 Word Backwards',
+  buttonRace:      '⚡ Button Race',
+  colorPicker:     '🎨 Color Picker',
+  math:            '🧮 Math Quiz',
+  trivia:          '🧠 Trivia',
+  wouldYouRather:  '🤔 Would You Rather',
+  numberSequence:  '🔢 Number Sequence',
 };
 
 export const data = new SlashCommandBuilder()

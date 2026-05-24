@@ -25,13 +25,12 @@ const GuildConfigSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Per-user role collection: which roles they've won and which are equipped
 const UserCollectionSchema = new mongoose.Schema(
   {
     guildId:  { type: String, required: true },
     userId:   { type: String, required: true },
-    owned:    { type: [String], default: [] },   // role IDs they've earned
-    equipped: { type: [String], default: [] },   // subset currently worn
+    owned:    { type: [String], default: [] },
+    equipped: { type: [String], default: [] },
   },
   { timestamps: true }
 );
@@ -130,6 +129,24 @@ export class ConfigService {
     return updated;
   }
 
+  addRewardRole(guildId, roleId) {
+    const cfg = this.get(guildId);
+    if (!cfg.rewardRoleIds.includes(roleId)) {
+      cfg.rewardRoleIds.push(roleId);
+      this._cache.set(guildId, cfg);
+      this._persist(guildId).catch(() => {});
+    }
+    return cfg;
+  }
+
+  removeRewardRole(guildId, roleId) {
+    const cfg = this.get(guildId);
+    cfg.rewardRoleIds = cfg.rewardRoleIds.filter(id => id !== roleId);
+    this._cache.set(guildId, cfg);
+    this._persist(guildId).catch(() => {});
+    return cfg;
+  }
+
   setGame(guildId, gameKey, enabled) {
     const cfg = this.get(guildId);
     cfg.games[gameKey] = enabled;
@@ -160,29 +177,46 @@ export class ConfigService {
     return this._userCache.get(key);
   }
 
+  setUserCollection(guildId, userId, updates) {
+    const coll = this.getUserCollection(guildId, userId);
+    const updated = { ...coll, ...updates };
+    this._userCache.set(`${guildId}:${userId}`, updated);
+    this._persistUser(guildId, userId).catch(() => {});
+    return updated;
+  }
+
   addOwnedRole(guildId, userId, roleId) {
     const coll = this.getUserCollection(guildId, userId);
     if (!coll.owned.includes(roleId)) {
       coll.owned.push(roleId);
-      this._persistUser(guildId, userId).catch(() => {});
+      return this.setUserCollection(guildId, userId, { owned: coll.owned });
     }
     return coll;
   }
 
   equipRole(guildId, userId, roleId) {
     const coll = this.getUserCollection(guildId, userId);
-    if (coll.owned.includes(roleId) && !coll.equipped.includes(roleId)) {
+    if (!coll.owned.includes(roleId)) return coll;
+    if (!coll.equipped.includes(roleId)) {
       coll.equipped.push(roleId);
-      this._persistUser(guildId, userId).catch(() => {});
+      return this.setUserCollection(guildId, userId, { equipped: coll.equipped });
     }
     return coll;
   }
 
   unequipRole(guildId, userId, roleId) {
     const coll = this.getUserCollection(guildId, userId);
-    coll.equipped = coll.equipped.filter(id => id !== roleId);
-    this._persistUser(guildId, userId).catch(() => {});
-    return coll;
+    const equipped = coll.equipped.filter(id => id !== roleId);
+    return this.setUserCollection(guildId, userId, { equipped });
+  }
+
+  unequipAll(guildId, userId) {
+    return this.setUserCollection(guildId, userId, { equipped: [] });
+  }
+
+  equipAll(guildId, userId) {
+    const coll = this.getUserCollection(guildId, userId);
+    return this.setUserCollection(guildId, userId, { equipped: [...coll.owned] });
   }
 
   // ── Private ────────────────────────────────────────────────────────────────

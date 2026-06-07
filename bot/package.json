@@ -1,0 +1,19 @@
+{
+  "name": "takina-games",
+  "version": "1.0.0",
+  "description": "Takina Games - Auto-running Discord game bot",
+  "main": "src/app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.4.0",
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "mongoose": "^8.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

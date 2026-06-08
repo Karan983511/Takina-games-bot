@@ -260,10 +260,25 @@ export async function handleRoleSetupInteraction(interaction, client) {
           }
         }
         if (session.iconType === 'emoji') return { unicodeEmoji: session.iconValue, icon: null };
-        if (session.iconType === 'image' && session.iconBuffer) {
-          // Convert Buffer → base64 data URI so Discord's API accepts it
-          const ct  = session.iconContentType ?? 'image/png';
-          const b64 = `data:${ct};base64,${session.iconBuffer.toString('base64')}`;
+        if (session.iconType === 'image') {
+          // Re-fetch the image fresh at save time — CDN URLs can expire between upload and save
+          let buf = session.iconBuffer;
+          let ct  = session.iconContentType ?? 'image/png';
+
+          if (session.iconUrl) {
+            try {
+              const r2 = await fetch(session.iconUrl);
+              if (r2.ok) {
+                buf = Buffer.from(await r2.arrayBuffer());
+                const rawCt2 = r2.headers.get('content-type') ?? ct;
+                ct = rawCt2.split(';')[0].trim();
+              }
+            } catch { /* use cached buffer */ }
+          }
+
+          if (!buf || buf.length === 0) return {};
+          const b64 = `data:${ct};base64,${buf.toString('base64')}`;
+          console.error(`[roleSetup] icon → ${ct}, bufSize=${buf.length}, b64Len=${b64.length}`);
           return { icon: b64, unicodeEmoji: null };
         }
         return {};
@@ -332,7 +347,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         return interaction.editReply({ embeds: [successEmbed(`Your custom role **${session.name}** has been created! ${discordRole}${note}`)] });
       }
     } catch (err) {
-      console.error('[roleSetup] Save error:', err);
+      console.error('[roleSetup] Save error:', err?.rawError ?? err);
       return interaction.editReply({ embeds: [errorEmbed(`Failed to save: ${err.message}`)] });
     }
   }
@@ -414,11 +429,16 @@ export async function handleRoleSetupMessage(message) {
       }
       try {
         const res = await fetch(att.url);
+        if (!res.ok) throw new Error(`CDN fetch failed: ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
+        // Strip any params from content type (e.g. "image/png; charset=utf-8" → "image/png")
+        const rawCt = att.contentType ?? 'image/png';
+        const cleanCt = rawCt.split(';')[0].trim();
         session.iconType        = 'image';
         session.iconValue       = att.name;
+        session.iconUrl         = att.url;   // keep URL so we can re-fetch at save time
         session.iconBuffer      = buf;
-        session.iconContentType = att.contentType ?? 'image/png'; // ← needed for base64 data URI
+        session.iconContentType = cleanCt;
         setSession(guild.id, author.id, session);
         const freshG = await guild.fetch().catch(() => guild);
         const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';

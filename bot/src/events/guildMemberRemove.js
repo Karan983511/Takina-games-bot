@@ -7,7 +7,7 @@ export default {
       const { handleMemberLeave } = await import('../booster/index.js');
       await handleMemberLeave(member);
     } catch (err) {
-      console.error('[guildMemberRemove] Booster handler error:', err);
+      console.error('[guildMemberRemove] Error:', err);
     }
   },
 };

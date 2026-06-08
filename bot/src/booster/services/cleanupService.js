@@ -1,55 +1,76 @@
-/**
- * cleanupService.js
- * Periodically hard-deletes booster role documents that have been soft-deleted
- * for longer than the guild's configured retention period.
- */
-
-import BoosterRole     from '../models/BoosterRole.js';
+import BoosterRole from '../models/BoosterRole.js';
 import BoosterSettings from '../models/BoosterSettings.js';
-import { log }         from '../utils/logger.js';
+import { log } from '../utils/logger.js';
 
 let _client = null;
+let _timer  = null;
 
-const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
+const INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export function startCleanupService(client) {
   _client = client;
-  setInterval(() => runCleanup(), CLEANUP_INTERVAL_MS);
-  runCleanup(); // run immediately on start
-  log('info', 'CleanupService', 'Booster cleanup service started');
+  _timer  = setInterval(runCleanup, INTERVAL_MS);
+  log('info', 'CleanupService', '✅ Started — runs every 24h');
 }
 
-async function runCleanup() {
-  try {
-    const allSettings = await BoosterSettings.find({}).lean();
+export function stopCleanupService() {
+  if (_timer) { clearInterval(_timer); _timer = null; }
+}
 
-    for (const settings of allSettings) {
-      const retentionDays = settings.retention?.days ?? 7;
-      const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+export async function runCleanup() {
+  if (!_client) return;
+  log('info', 'CleanupService', 'Running scheduled cleanup...');
 
-      // Find soft-deleted docs older than retention window
-      const expired = await BoosterRole.find({
-        guildId:      settings.guildId,
-        active:       false,
-        softDeletedAt: { $lte: cutoff },
-      }).lean();
+  const guilds = _client.guilds?.cache;
+  if (!guilds?.size) return;
 
-      if (!expired.length) continue;
+  let totalPurged = 0;
 
-      for (const doc of expired) {
-        // Make sure the Discord role is gone (it should already be, but be safe)
-        const guild = _client?.guilds?.cache?.get(settings.guildId);
-        if (guild && doc.roleId) {
-          const discordRole = guild.roles.cache.get(doc.roleId);
-          if (discordRole) {
-            await discordRole.delete('Booster retention cleanup').catch(() => {});
-          }
-        }
-        await BoosterRole.deleteOne({ _id: doc._id });
-        log('info', 'CleanupService', `Purged expired booster role doc for ${doc.userId} in ${settings.guildId}`);
-      }
+  for (const [guildId] of guilds) {
+    try {
+      const purged = await cleanupGuild(guildId);
+      totalPurged += purged;
+    } catch (err) {
+      log('error', 'CleanupService', `Failed for guild ${guildId}: ${err.message}`);
     }
-  } catch (err) {
-    log('error', 'CleanupService', `Cleanup run failed: ${err.message}`);
   }
+
+  log('info', 'CleanupService', `Done — purged ${totalPurged} expired record(s) across all guilds`);
+}
+
+async function cleanupGuild(guildId) {
+  const settings     = await BoosterSettings.findOne({ guildId }).lean();
+  const retentionDays = settings?.retention?.days ?? 7;
+  const cutoff        = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+
+  // Inactive records older than retention period
+  const expired = await BoosterRole.find({
+    guildId,
+    active: false,
+    softDeletedAt: { $lt: cutoff },
+  }).lean();
+
+  if (!expired.length) return 0;
+
+  const ids = expired.map(d => d._id);
+  await BoosterRole.deleteMany({ _id: { $in: ids } });
+
+  // Log to the guild's log channel if configured
+  if (settings?.logChannelId && _client) {
+    const guild = _client.guilds.cache.get(guildId);
+    const ch    = guild?.channels.cache.get(settings.logChannelId);
+    if (ch) {
+      const { EmbedBuilder } = await import('discord.js');
+      ch.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0xED4245)
+          .setTitle('🗑️ Automated Cleanup')
+          .setDescription(`Permanently deleted **${expired.length}** expired booster record(s) (>${retentionDays} days inactive).`)
+          .setTimestamp()],
+      }).catch(() => {});
+    }
+  }
+
+  log('info', 'CleanupService', `Guild ${guildId} — purged ${expired.length} record(s) (retention: ${retentionDays}d)`);
+  return expired.length;
 }

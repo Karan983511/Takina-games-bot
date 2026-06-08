@@ -368,7 +368,7 @@ export class GameScheduler {
       try {
         await interaction.reply({
           embeds: [def.wrongEmbed ? def.wrongEmbed() : new EmbedBuilder().setDescription('❌ Wrong!').setColor(0xED4245)],
-          fetchReply: true,
+          ephemeral: true,
         });
       } catch { /* ignore */ }
     }

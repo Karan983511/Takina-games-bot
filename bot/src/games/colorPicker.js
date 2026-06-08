@@ -24,11 +24,11 @@ export function buildColorPickerGame() {
 
 export function buildColorPickerEmbed(correct) {
   return new EmbedBuilder()
-    .setColor(0x5865F2)
+    .setColor(correct.hex)  // embed color IS the answer
     .setTitle('🎨 Color Picker!')
     .setDescription(
-      `**Click the button with the correct color!**\n\n` +
-      `Only one button is right — be quick!\n` +
+      `**What color is this embed?**\n\n` +
+      `Click the matching color button — be quick!\n` +
       `⏰ You have **20 seconds**!`
     )
     .setFooter({ text: 'Takina Games' })

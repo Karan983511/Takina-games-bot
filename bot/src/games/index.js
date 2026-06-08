@@ -168,9 +168,9 @@ export async function grantRewardRole(guild, userId, roleIds, configService) {
   // Filter out roles the user already owns so they never get duplicates
   const userOwned = configService ? configService.getUserCollection(guild.id, userId).owned : [];
   const available = roleIds.filter(id => !userOwned.includes(id));
-  const pool = available.length ? available : roleIds; // fallback to all if they own everything
+  if (!available.length) return null; // already owns everything, skip
 
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const shuffled = [...available].sort(() => Math.random() - 0.5);
 
   for (const roleId of shuffled) {
     try {

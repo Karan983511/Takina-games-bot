@@ -1,76 +1,108 @@
-/**
- * rotationService.js
- * Periodically re-positions all active booster roles so they stay within
- * the admin-configured upper/lower boundaries.
- * This is separate from the weekly featured rotation (schedulerService.js).
- */
-
+import BoosterRole from '../models/BoosterRole.js';
 import BoosterSettings from '../models/BoosterSettings.js';
-import BoosterRole     from '../models/BoosterRole.js';
 import { getInsertPosition } from '../utils/boundary.js';
-import { log }         from '../utils/logger.js';
+import { log } from '../utils/logger.js';
 
 let _client = null;
-
-const FREQUENCY_TO_MS = {
-  hourly:  60 * 60 * 1000,
-  daily:   24 * 60 * 60 * 1000,
-  weekly:  7  * 24 * 60 * 60 * 1000,
-  monthly: 30 * 24 * 60 * 60 * 1000,
-};
+const _timers = new Map(); // guildId → NodeJS.Timeout
 
 export function startRotationService(client) {
   _client = client;
-  // Check every hour; each guild's actual frequency is controlled by settings
-  setInterval(() => tick(), 60 * 60 * 1000);
-  log('info', 'RotationService', 'Boundary rotation service started');
+  log('info', 'RotationService', '✅ Started');
+  _scheduleAll();
 }
 
-async function tick() {
+export function stopRotationService() {
+  for (const t of _timers.values()) clearTimeout(t);
+  _timers.clear();
+}
+
+/** Called from /bsetup when rotation settings change for a specific guild. */
+export async function rescheduleGuild(guildId) {
+  if (_timers.has(guildId)) { clearTimeout(_timers.get(guildId)); _timers.delete(guildId); }
+  await _scheduleGuild(guildId);
+}
+
+async function _scheduleAll() {
   if (!_client) return;
-
-  for (const guild of _client.guilds.cache.values()) {
-    try {
-      const settings = await BoosterSettings.findOne({ guildId: guild.id }).lean();
-      if (!settings?.rotation?.enabled) continue;
-
-      const freq = settings.rotation.frequency ?? 'daily';
-      const intervalMs = freq === 'custom'
-        ? (settings.rotation.customIntervalMinutes ?? 1440) * 60 * 1000
-        : (FREQUENCY_TO_MS[freq] ?? FREQUENCY_TO_MS.daily);
-
-      const lastRun = settings.rotation.lastRun ? new Date(settings.rotation.lastRun).getTime() : 0;
-      if (Date.now() - lastRun < intervalMs) continue;
-
-      await repositionRoles(guild, settings);
-
-      await BoosterSettings.updateOne(
-        { guildId: guild.id },
-        { $set: { 'rotation.lastRun': new Date() } }
-      );
-    } catch (err) {
-      log('error', 'RotationService', `Tick failed for ${guild.id}: ${err.message}`);
-    }
+  for (const [guildId] of _client.guilds.cache) {
+    await _scheduleGuild(guildId).catch(() => {});
   }
 }
 
-async function repositionRoles(guild, settings) {
-  const roles = await BoosterRole.find({ guildId: guild.id, active: true, roleId: { $ne: null } }).lean();
-  if (!roles.length) return;
+async function _scheduleGuild(guildId) {
+  const settings = await BoosterSettings.findOne({ guildId }).lean().catch(() => null);
+  if (!settings?.rotation?.enabled) return;
 
-  const basePosition = await getInsertPosition(guild);
-  const moves = [];
+  const ms    = _freqToMs(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
+  const timer = setTimeout(async () => {
+    await runRotationForGuild(guildId);
+    _scheduleGuild(guildId); // reschedule
+  }, ms);
 
-  for (let i = 0; i < roles.length; i++) {
-    const discordRole = guild.roles.cache.get(roles[i].roleId);
-    if (!discordRole) continue;
-    moves.push({ role: discordRole.id, position: basePosition + i });
+  _timers.set(guildId, timer);
+  log('info', 'RotationService', `Scheduled rotation for guild ${guildId} in ${Math.round(ms / 60000)}min`);
+}
+
+function _freqToMs(freq, customMinutes) {
+  switch (freq) {
+    case 'hourly':  return 60 * 60 * 1000;
+    case 'daily':   return 24 * 60 * 60 * 1000;
+    case 'weekly':  return 7  * 24 * 60 * 60 * 1000;
+    case 'monthly': return 30 * 24 * 60 * 60 * 1000;
+    case 'custom':  return Math.max(30, customMinutes ?? 1440) * 60 * 1000;
+    default:        return 24 * 60 * 60 * 1000;
   }
+}
 
-  if (moves.length) {
-    await guild.roles.setPositions(moves).catch(err =>
-      log('warn', 'RotationService', `setPositions failed for ${guild.id}: ${err.message}`)
-    );
-    log('info', 'RotationService', `Re-positioned ${moves.length} role(s) in ${guild.id}`);
+export async function runRotationForGuild(guildId) {
+  try {
+    const guild = _client?.guilds?.cache?.get(guildId);
+    if (!guild) return;
+
+    const roles = await BoosterRole.find({ guildId, active: true }).lean();
+    if (!roles.length) return;
+
+    const settings   = await BoosterSettings.findOne({ guildId }).lean();
+    const upperRole  = settings?.boundaries?.upperRoleId ? guild.roles.cache.get(settings.boundaries.upperRoleId) : null;
+    const lowerRole  = settings?.boundaries?.lowerRoleId ? guild.roles.cache.get(settings.boundaries.lowerRoleId) : null;
+
+    if (!upperRole || !lowerRole) return;
+
+    const upperPos = upperRole.position;
+    const lowerPos = lowerRole.position;
+    const target   = await getInsertPosition(guild);
+
+    let repositioned = 0;
+
+    for (const doc of roles) {
+      const dr = guild.roles.cache.get(doc.roleId);
+      if (!dr) continue;
+      const pos = dr.position;
+      const inBounds = pos < upperPos && pos > lowerPos;
+      if (!inBounds) {
+        await dr.setPosition(target).catch(() => {});
+        repositioned++;
+        log('info', 'RotationService', `Repositioned role ${doc.roleId} for ${doc.userId} back into bounds`);
+      }
+    }
+
+    if (repositioned > 0 && settings?.logChannelId) {
+      const ch = guild.channels.cache.get(settings.logChannelId);
+      if (ch) {
+        const { EmbedBuilder } = await import('discord.js');
+        ch.send({
+          embeds: [new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('🔄 Boundary Rotation')
+            .setDescription(`Repositioned **${repositioned}** role(s) back within boundaries.`)
+            .setTimestamp()],
+        }).catch(() => {});
+      }
+    }
+
+    log('info', 'RotationService', `Rotation complete for ${guildId}: ${repositioned} repositioned`);
+  } catch (err) {
+    log('error', 'RotationService', `Error for guild ${guildId}: ${err.message}`);
   }
 }

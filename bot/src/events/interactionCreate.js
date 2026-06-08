@@ -33,6 +33,21 @@ export default {
 
     const customId = interaction.customId;
 
+    // ── /bsetup dashboard interactions ─────────────────────────────────────────
+    if (customId?.startsWith('bsetup_')) {
+      try {
+        const bsetup = client.commands.get('bsetup');
+        if (bsetup?.handleComponent) await bsetup.handleComponent(interaction, client);
+      } catch (err) {
+        console.error('[InteractionCreate] bsetup interaction error:', err);
+        const reply = { content: '❌ Something went wrong.', flags: MessageFlags.Ephemeral };
+        if (interaction.replied || interaction.deferred) await interaction.followUp(reply).catch(() => {});
+        else if (interaction.isModalSubmit()) await interaction.reply(reply).catch(() => {});
+        else await interaction.update({ content: '❌ Something went wrong.', components: [] }).catch(() => {});
+      }
+      return;
+    }
+
     // ── .role setup interactions ───────────────────────────────────────────────
     if (customId?.startsWith('rolesetup_')) {
       try {
@@ -47,39 +62,49 @@ export default {
       return;
     }
 
-    // ── /bsetup panel interactions ─────────────────────────────────────────────
-    if (customId?.startsWith('bsetup_')) {
-      try {
-        const bsetup = client.commands.get('bsetup');
-        if (bsetup?.handleComponent) await bsetup.handleComponent(interaction, client);
-      } catch (err) {
-        console.error('[InteractionCreate] bsetup component error:', err);
-        const reply = { content: '❌ Something went wrong with the admin panel.', flags: MessageFlags.Ephemeral };
-        if (interaction.replied || interaction.deferred) await interaction.followUp(reply).catch(() => {});
-        else await interaction.reply(reply).catch(() => {});
+    // ── .role delete confirm/cancel ────────────────────────────────────────────
+    if (customId?.startsWith('roledelete_')) {
+      const parts  = customId.split('_');
+      const action = parts[1];
+      const ownerId = parts[2];
+
+      if (interaction.user.id !== ownerId) {
+        return interaction.reply({ content: "⛔ This isn't your confirmation.", flags: MessageFlags.Ephemeral });
+      }
+
+      if (action === 'cancel') {
+        return interaction.update({
+          embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription('✅ Cancelled — your role was not deleted.')],
+          components: [],
+        });
+      }
+
+      if (action === 'confirm') {
+        try {
+          const { deleteBoosterRole } = await import('../booster/services/roleService.js');
+          const doc = await deleteBoosterRole(interaction.guild, ownerId);
+          if (!doc) {
+            return interaction.update({
+              embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription('⚠️ No active role found — it may have already been deleted.')],
+              components: [],
+            });
+          }
+          return interaction.update({
+            embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Your role **${doc.name}** has been deleted.`)],
+            components: [],
+          });
+        } catch (err) {
+          console.error('[InteractionCreate] roledelete error:', err);
+          return interaction.update({
+            embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Failed to delete: ${err.message}`)],
+            components: [],
+          });
+        }
       }
       return;
     }
 
-    // ── Booster module interactions ────────────────────────────────────────────
-    if (
-      customId?.startsWith('booster_') ||
-      customId?.startsWith('bsettings_') ||
-      customId?.startsWith('roledelete_')
-    ) {
-      try {
-        const { handleBoosterInteraction } = await import('../booster/index.js');
-        await handleBoosterInteraction(interaction, client);
-      } catch (err) {
-        console.error('[InteractionCreate] Booster interaction error:', err);
-        const reply = { content: '❌ Something went wrong with the booster system.', flags: MessageFlags.Ephemeral };
-        if (interaction.replied || interaction.deferred) await interaction.followUp(reply).catch(() => {});
-        else await interaction.reply(reply).catch(() => {});
-      }
-      return;
-    }
-
-    // ── Game setup panel ───────────────────────────────────────────────────────
+    // ── /setup (game bot setup) ────────────────────────────────────────────────
     if (customId?.startsWith('setup_')) {
       const setup = client.commands.get('setup');
       if (setup?.handleComponent) {
@@ -99,9 +124,8 @@ export default {
     // ── .loot equip/unequip select menu ───────────────────────────────────────
     if (customId?.startsWith('loot_toggle_')) {
       const userId = customId.split('_').pop();
-
       if (interaction.user.id !== userId) {
-        return interaction.reply({ content: '⛔ This isn\'t your loot panel!', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: "⛔ This isn't your loot panel!", flags: MessageFlags.Ephemeral });
       }
 
       const roleId  = interaction.values[0];
@@ -111,7 +135,6 @@ export default {
                    ?? await interaction.guild.members.fetch(userId).catch(() => null);
 
       const isEquipped = coll.equipped.includes(roleId);
-
       if (isEquipped) {
         client.config.unequipRole(guildId, userId, roleId);
         await member?.roles.remove(roleId).catch(() => {});
@@ -128,7 +151,6 @@ export default {
 
       const unlocked = [];
       const locked   = [];
-
       for (const rid of roleIds) {
         const role = interaction.guild.roles.cache.get(rid);
         if (!role) continue;
@@ -174,8 +196,7 @@ export default {
         const options = unlocked.map(({ role, roleId: rid }) => {
           const isEq = equipped.has(rid);
           return new StringSelectMenuOptionBuilder()
-            .setLabel(role.name)
-            .setValue(rid)
+            .setLabel(role.name).setValue(rid)
             .setEmoji(isEq ? '✅' : '📦')
             .setDescription(isEq ? '✅ Equipped — select to remove' : '📦 Owned — select to equip');
         });
@@ -183,8 +204,7 @@ export default {
           new StringSelectMenuBuilder()
             .setCustomId(`loot_toggle_${userId}`)
             .setPlaceholder('⚖️ Equip / Unequip a role...')
-            .setMinValues(1).setMaxValues(1)
-            .addOptions(options),
+            .setMinValues(1).setMaxValues(1).addOptions(options),
         ));
       }
 

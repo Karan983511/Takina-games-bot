@@ -242,10 +242,6 @@ export async function handleRoleSetupInteraction(interaction, client) {
       const existing = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
 
       // ── Helper: build icon fields ──────────────────────────────────────────
-      // Always fetch fresh guild so premiumTier is accurate
-      const freshGuild = await guild.fetch().catch(() => guild);
-      const canUseIcons = freshGuild.premiumTier >= 2;
-
       async function resolveIconFields() {
         if (session.iconType === 'custom') {
           const match = session.iconValue?.match(/^<a?:\w+:(\d+)>$/);
@@ -253,43 +249,18 @@ export async function handleRoleSetupInteraction(interaction, client) {
             const ext = session.iconValue.startsWith('<a:') ? 'gif' : 'png';
             try {
               const res = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
-              const buf = Buffer.from(await res.arrayBuffer());
-              const b64 = `data:image/${ext};base64,${buf.toString('base64')}`;
-              return { icon: b64, unicodeEmoji: null };
+              return { icon: Buffer.from(await res.arrayBuffer()), unicodeEmoji: null };
             } catch { return {}; }
           }
         }
-        if (session.iconType === 'emoji') return { unicodeEmoji: session.iconValue, icon: null };
-        if (session.iconType === 'image') {
-          // Re-fetch the image fresh at save time — CDN URLs can expire between upload and save
-          let buf = session.iconBuffer;
-          let ct  = session.iconContentType ?? 'image/png';
-
-          if (session.iconUrl) {
-            try {
-              const r2 = await fetch(session.iconUrl);
-              if (r2.ok) {
-                buf = Buffer.from(await r2.arrayBuffer());
-                const rawCt2 = r2.headers.get('content-type') ?? ct;
-                ct = rawCt2.split(';')[0].trim();
-              }
-            } catch { /* use cached buffer */ }
-          }
-
-          if (!buf || buf.length === 0) return {};
-          const b64 = `data:${ct};base64,${buf.toString('base64')}`;
-          console.error(`[roleSetup] icon → ${ct}, bufSize=${buf.length}, b64Len=${b64.length}`);
-          return { icon: b64, unicodeEmoji: null };
-        }
+        if (session.iconType === 'emoji')  return { unicodeEmoji: session.iconValue, icon: null };
+        if (session.iconType === 'image' && session.iconBuffer) return { icon: session.iconBuffer, unicodeEmoji: null };
         return {};
       }
 
-      const iconFields  = await resolveIconFields();
-      const iconSaved   = session.iconType && Object.keys(iconFields).length > 0;
-      // Only apply icon fields if the server actually supports role icons
-      const iconApplied = iconSaved && canUseIcons;
-      const iconSkipped = iconSaved && !canUseIcons;
-      const appliedFields = iconApplied ? iconFields : {};
+      const iconFields = await resolveIconFields();
+      const iconSaved  = session.iconType && Object.keys(iconFields).length > 0;
+      const iconSkipped = session.iconType && !supportsRoleIcons(guild);
 
       if (existing) {
         // ── Edit existing role ───────────────────────────────────────────────
@@ -297,7 +268,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         if (!discordRole) throw new Error('Your Discord role no longer exists.');
         await assertBoundary(guild, discordRole);
 
-        await discordRole.edit({ name: session.name, color: session.color1, ...appliedFields });
+        await discordRole.edit({ name: session.name, color: session.color1, ...iconFields });
 
         existing.name           = session.name;
         existing.color          = session.color1;
@@ -315,7 +286,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
       } else {
         // ── Create new role ──────────────────────────────────────────────────
         const position = await getInsertPosition(guild);
-        const roleData = { name: session.name, color: session.color1, hoist: false, mentionable: false, ...appliedFields };
+        const roleData = { name: session.name, color: session.color1, hoist: false, mentionable: false, ...iconFields };
 
         const discordRole = await guild.roles.create(roleData);
         await discordRole.setPosition(position).catch(() => {});
@@ -347,7 +318,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         return interaction.editReply({ embeds: [successEmbed(`Your custom role **${session.name}** has been created! ${discordRole}${note}`)] });
       }
     } catch (err) {
-      console.error('[roleSetup] Save error:', err?.rawError ?? err);
+      console.error('[roleSetup] Save error:', err);
       return interaction.editReply({ embeds: [errorEmbed(`Failed to save: ${err.message}`)] });
     }
   }
@@ -429,16 +400,10 @@ export async function handleRoleSetupMessage(message) {
       }
       try {
         const res = await fetch(att.url);
-        if (!res.ok) throw new Error(`CDN fetch failed: ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
-        // Strip any params from content type (e.g. "image/png; charset=utf-8" → "image/png")
-        const rawCt = att.contentType ?? 'image/png';
-        const cleanCt = rawCt.split(';')[0].trim();
-        session.iconType        = 'image';
-        session.iconValue       = att.name;
-        session.iconUrl         = att.url;   // keep URL so we can re-fetch at save time
-        session.iconBuffer      = buf;
-        session.iconContentType = cleanCt;
+        session.iconType   = 'image';
+        session.iconValue  = att.name;
+        session.iconBuffer = buf;
         setSession(guild.id, author.id, session);
         const freshG = await guild.fetch().catch(() => guild);
         const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';

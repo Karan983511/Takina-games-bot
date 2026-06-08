@@ -242,25 +242,34 @@ export async function handleRoleSetupInteraction(interaction, client) {
       const existing = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
 
       // ── Helper: build icon fields ──────────────────────────────────────────
+      // Always fetch fresh guild so premiumTier is accurate
+      const freshGuild  = await guild.fetch().catch(() => guild);
+      const canUseIcons = freshGuild.premiumTier >= 2;
+
       async function resolveIconFields() {
         if (session.iconType === 'custom') {
           const match = session.iconValue?.match(/^<a?:\w+:(\d+)>$/);
           if (match) {
             const ext = session.iconValue.startsWith('<a:') ? 'gif' : 'png';
             try {
-              const res = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
-              return { icon: Buffer.from(await res.arrayBuffer()), unicodeEmoji: null };
+              const r   = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
+              const buf = Buffer.from(await r.arrayBuffer());
+              // Must use data URI — Discord.js encodes raw Buffers as image/jpg regardless of format
+              return { icon: `data:image/${ext};base64,${buf.toString('base64')}`, unicodeEmoji: null };
             } catch { return {}; }
           }
         }
-        if (session.iconType === 'emoji')  return { unicodeEmoji: session.iconValue, icon: null };
-        if (session.iconType === 'image' && session.iconBuffer) return { icon: session.iconBuffer, unicodeEmoji: null };
+        if (session.iconType === 'emoji') return { unicodeEmoji: session.iconValue, icon: null };
+        // image: iconValue is already a data URI (set at upload time)
+        if (session.iconType === 'image' && session.iconValue) return { icon: session.iconValue, unicodeEmoji: null };
         return {};
       }
 
-      const iconFields = await resolveIconFields();
-      const iconSaved  = session.iconType && Object.keys(iconFields).length > 0;
-      const iconSkipped = session.iconType && !supportsRoleIcons(guild);
+      const iconFields  = await resolveIconFields();
+      const iconSaved   = session.iconType && Object.keys(iconFields).length > 0;
+      const iconSkipped = iconSaved && !canUseIcons;
+      // Only spread icon into the Discord API call if the server actually supports role icons
+      const appliedFields = (iconSaved && canUseIcons) ? iconFields : {};
 
       if (existing) {
         // ── Edit existing role ───────────────────────────────────────────────
@@ -268,14 +277,13 @@ export async function handleRoleSetupInteraction(interaction, client) {
         if (!discordRole) throw new Error('Your Discord role no longer exists.');
         await assertBoundary(guild, discordRole);
 
-        await discordRole.edit({ name: session.name, color: session.color1, ...iconFields });
+        await discordRole.edit({ name: session.name, color: session.color1, ...appliedFields });
 
         existing.name           = session.name;
         existing.color          = session.color1;
         existing.colorSecondary = session.color2 ?? null;
-        existing.iconType       = session.iconType ?? 'none';
-        if (session.iconType === 'emoji' || session.iconType === 'custom') existing.icon = session.iconValue;
-        else if (session.iconType === 'image') existing.icon = null;
+        existing.iconType = session.iconType ?? 'none';
+        existing.icon     = session.iconValue ?? null; // data URI for images, emoji string for others
         await existing.save();
 
         await audit(client, guild.id, userId, 'ROLE_EDITED', { name: session.name, color: session.color1 });
@@ -286,7 +294,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
       } else {
         // ── Create new role ──────────────────────────────────────────────────
         const position = await getInsertPosition(guild);
-        const roleData = { name: session.name, color: session.color1, hoist: false, mentionable: false, ...iconFields };
+        const roleData = { name: session.name, color: session.color1, hoist: false, mentionable: false, ...appliedFields };
 
         const discordRole = await guild.roles.create(roleData);
         await discordRole.setPosition(position).catch(() => {});
@@ -300,7 +308,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
               color:          session.color1,
               colorSecondary: session.color2 ?? null,
               iconType:       session.iconType ?? 'none',
-              icon:           (session.iconType === 'emoji' || session.iconType === 'custom') ? session.iconValue : null,
+              icon:           session.iconValue ?? null,
               active:         true,
               softDeletedAt:  null,
             },
@@ -400,10 +408,15 @@ export async function handleRoleSetupMessage(message) {
       }
       try {
         const res = await fetch(att.url);
-        const buf = Buffer.from(await res.arrayBuffer());
+        if (!res.ok) throw new Error(`fetch ${res.status}`);
+        const buf  = Buffer.from(await res.arrayBuffer());
+        // Strip params ("image/png; charset=utf-8" → "image/png"), convert to data URI now
+        // so we never pass a raw Buffer to Discord.js (it always encodes those as image/jpg)
+        const ct   = (att.contentType ?? 'image/png').split(';')[0].trim();
+        const b64  = `data:${ct};base64,${buf.toString('base64')}`;
         session.iconType   = 'image';
-        session.iconValue  = att.name;
-        session.iconBuffer = buf;
+        session.iconValue  = b64;   // stored as data URI, not raw Buffer
+        session.iconBuffer = null;
         setSession(guild.id, author.id, session);
         const freshG = await guild.fetch().catch(() => guild);
         const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';

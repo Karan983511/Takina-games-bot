@@ -62,10 +62,13 @@ export async function restoreRole(guild, userId) {
     try {
       const primary   = parseInt((doc.color || '#99AAB5').replace('#', ''), 16);
       const secondary = parseInt(doc.colorSecondary.replace('#', ''), 16);
+      // color must be 0 to enable gradient mode
       await guild.client.rest.patch(`/guilds/${guild.id}/roles/${discordRole.id}`, {
-        body: { colors: [primary, secondary] },
+        body: { color: 0, colors: [primary, secondary] },
       });
-    } catch { /* gradient is best-effort */ }
+    } catch (err) {
+      console.error('[roleService] restoreRole gradient failed:', err.rawError ?? err.message);
+    }
   }
   doc.roleId = discordRole.id; doc.active = true; doc.softDeletedAt = null; await doc.save();
   const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);

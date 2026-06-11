@@ -27,12 +27,13 @@ async function applyGradientColors(client, guildId, roleId, color1, color2) {
   try {
     const primary   = parseInt(color1.replace('#', ''), 16);
     const secondary = parseInt(color2.replace('#', ''), 16);
+    // color must be 0 to enable gradient mode — a non-zero color field overrides it
     await client.rest.patch(`/guilds/${guildId}/roles/${roleId}`, {
-      body: { colors: [primary, secondary] },
+      body: { color: 0, colors: [primary, secondary] },
     });
+    console.log(`[roleSetup] Gradient applied to role ${roleId}: ${color1} → ${color2}`);
   } catch (err) {
-    // Gradient is best-effort — log but don't fail the whole save
-    console.warn('[roleSetup] applyGradientColors failed (Discord may not support it here):', err.message);
+    console.error('[roleSetup] applyGradientColors failed:', err.rawError ?? err.message);
   }
 }
 

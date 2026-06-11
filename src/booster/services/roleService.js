@@ -4,9 +4,7 @@ import { log } from '../utils/logger.js';
 
 export async function createBoosterRole(guild, userId, { name, color, icon, template }) {
   const position = await getInsertPosition(guild);
-  // Do not pass position to create() — Discord ignores it for new roles.
-  // Create first, then explicitly move the role into the boundary.
-  const roleData = { name, color: color || '#99AAB5', hoist: false, mentionable: false };
+  const roleData = { name, colors: [color || '#99AAB5'], hoist: false, mentionable: false };
   if (icon) roleData.icon = icon;
   const discordRole = await guild.roles.create(roleData);
   await discordRole.setPosition(position).catch(() => {});
@@ -28,8 +26,8 @@ export async function editBoosterRole(guild, userId, updates) {
   if (!discordRole) throw new Error('Discord role no longer exists. Try `.booster restore`.');
   await assertBoundary(guild, discordRole);
   const patch = {};
-  if (updates.name)  { patch.name  = updates.name;  doc.name  = updates.name;  }
-  if (updates.color) { patch.color = updates.color;  doc.color = updates.color; }
+  if (updates.name)  { patch.name   = updates.name;  doc.name  = updates.name;  }
+  if (updates.color) { patch.colors = [updates.color]; doc.color = updates.color; }
   if (updates.icon !== undefined) { patch.icon = updates.icon; doc.icon = updates.icon; }
   await discordRole.edit(patch);
   await doc.save();
@@ -52,24 +50,13 @@ export async function softDeleteRole(guild, userId) {
 export async function restoreRole(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: false });
   if (!doc) return null;
-  const position  = await getInsertPosition(guild);
-  const roleData  = { name: doc.name, color: doc.color, hoist: false, mentionable: false };
+  const position = await getInsertPosition(guild);
+  const colors   = doc.colorSecondary ? [doc.color, doc.colorSecondary] : [doc.color || '#99AAB5'];
+  const roleData = { name: doc.name, colors, hoist: false, mentionable: false };
   if (doc.icon) roleData.icon = doc.icon;
   const discordRole = await guild.roles.create(roleData).catch(() => null);
   if (!discordRole) return null;
   await discordRole.setPosition(position).catch(() => {});
-  if (doc.colorSecondary) {
-    try {
-      const primary   = parseInt((doc.color || '#99AAB5').replace('#', ''), 16);
-      const secondary = parseInt(doc.colorSecondary.replace('#', ''), 16);
-      // color must be 0 to enable gradient mode
-      await guild.client.rest.patch(`/guilds/${guild.id}/roles/${discordRole.id}`, {
-        body: { color: 0, colors: [primary, secondary] },
-      });
-    } catch (err) {
-      console.error('[roleService] restoreRole gradient failed:', err.rawError ?? err.message);
-    }
-  }
   doc.roleId = discordRole.id; doc.active = true; doc.softDeletedAt = null; await doc.save();
   const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
   if (member) await member.roles.add(discordRole).catch(() => {});

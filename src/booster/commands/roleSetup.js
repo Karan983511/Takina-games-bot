@@ -19,23 +19,6 @@ import { normalizeHex } from '../utils/validators.js';
 import { errorEmbed, successEmbed } from '../utils/embeds.js';
 import { audit } from '../utils/logger.js';
 
-// ─── Gradient color helper ────────────────────────────────────────────────────
-// discord.js v14 does not expose a high-level gradient API.
-// The only working approach is a direct REST PATCH after the role is created/edited.
-async function applyGradientColors(client, guildId, roleId, color1, color2) {
-  if (!color2) return; // single color — nothing extra to do
-  try {
-    const primary   = parseInt(color1.replace('#', ''), 16);
-    const secondary = parseInt(color2.replace('#', ''), 16);
-    // color must be 0 to enable gradient mode — a non-zero color field overrides it
-    await client.rest.patch(`/guilds/${guildId}/roles/${roleId}`, {
-      body: { color: 0, colors: [primary, secondary] },
-    });
-    console.log(`[roleSetup] Gradient applied to role ${roleId}: ${color1} → ${color2}`);
-  } catch (err) {
-    console.error('[roleSetup] applyGradientColors failed:', err.rawError ?? err.message);
-  }
-}
 
 // ─── In-memory session store (per user per guild) ─────────────────────────────
 // shape: { name, color1, color2, iconType, iconValue, messageId, channelId }
@@ -304,7 +287,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         if (!discordRole) throw new Error('Your Discord role no longer exists. Try `.booster restore`.');
         await assertBoundary(guild, discordRole);
 
-        const patch = { name: session.name, color: session.color1 };
+        const patch = { name: session.name, colors: session.color2 ? [session.color1, session.color2] : [session.color1] };
 
         if (session.iconType === 'custom') {
           // Bug fix: custom emoji needs its image fetched and passed as a buffer
@@ -326,7 +309,6 @@ export async function handleRoleSetupInteraction(interaction, client) {
         }
 
         await discordRole.edit(patch);
-        await applyGradientColors(client, guild.id, discordRole.id, session.color1, session.color2);
 
         existing.name           = session.name;
         existing.color          = session.color1;
@@ -352,7 +334,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         // Create first, then explicitly move the role into the boundary.
         const roleData = {
           name:        session.name,
-          color:       session.color1,
+          colors:      session.color2 ? [session.color1, session.color2] : [session.color1],
           hoist:       false,
           mentionable: false,
         };
@@ -377,7 +359,6 @@ export async function handleRoleSetupInteraction(interaction, client) {
         try {
           discordRole = await guild.roles.create(roleData);
           await discordRole.setPosition(position).catch(() => {}); // Move to top of boundary
-          await applyGradientColors(client, guild.id, discordRole.id, session.color1, session.color2);
         } catch (err) {
           // Icon may be rejected — create without it and report
           if (err.message?.toLowerCase().includes('icon') || err.code === 50013) {
@@ -385,7 +366,6 @@ export async function handleRoleSetupInteraction(interaction, client) {
             delete roleData.unicodeEmoji;
             discordRole = await guild.roles.create(roleData);
             await discordRole.setPosition(position).catch(() => {}); // Move to top of boundary
-            await applyGradientColors(client, guild.id, discordRole.id, session.color1, session.color2);
             await interaction.editReply({
               embeds: [
                 new EmbedBuilder()

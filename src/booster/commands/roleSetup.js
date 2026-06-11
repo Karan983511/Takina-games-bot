@@ -224,8 +224,8 @@ export async function handleRoleSetupInteraction(interaction, client) {
           .setTitle('2️⃣ Set Colors')
           .setDescription(
             'Send **one** hex color for a solid color:\n```\n#ff6793\n```\n' +
-            'Or **two** hex colors for a gradient display:\n```\n#ff6793 #ff8e3a\n```\n' +
-            '*The first color becomes the Discord role color.*'
+            'Or **two** hex colors for a gradient:\n```\n#ff6793 #ff8e3a\n```\n' +
+            '*Two colors will create a gradient effect on your role.*'
           ),
       ],
       flags: MessageFlags.Ephemeral,

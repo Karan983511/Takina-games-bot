@@ -1,4 +1,4 @@
-import { ChannelType, EmbedBuilder } from 'discord.js';
+import { ChannelType, EmbedBuilder, MessageFlags } from 'discord.js';
 import { ALL_GAMES, TEXT_GAMES, BUTTON_GAMES, pickRandomGame, shouldGiveRole, grantRewardRole } from '../games/index.js';
 
 const GAME_END_COOLDOWN  = 5 * 60 * 1000;  // 5 minutes between games
@@ -311,7 +311,7 @@ export class GameScheduler {
     // ── WYR: show voters list (ephemeral) ─────────────────────────────────────
     if (def.isWyr && def.isVoterCheck && def.isVoterCheck(customId)) {
       try {
-        await interaction.reply({ embeds: [def.votersEmbed(state.game)], ephemeral: true });
+        await interaction.reply({ embeds: [def.votersEmbed(state.game)], flags: MessageFlags.Ephemeral });
       } catch { /* ignore */ }
       return;
     }
@@ -329,7 +329,7 @@ export class GameScheduler {
     const userTries = state.buttonAttempts.get(userId) || 0;
     const maxButtonAttempts = def.maxAttempts ?? Infinity;
     if (userTries >= maxButtonAttempts) {
-      try { await interaction.reply({ content: '⛔ You already tried!', ephemeral: true }); } catch { /* ignore */ }
+      try { await interaction.reply({ content: '⛔ You already tried!', flags: MessageFlags.Ephemeral }); } catch { /* ignore */ }
       return;
     }
 
@@ -368,7 +368,7 @@ export class GameScheduler {
       try {
         await interaction.reply({
           embeds: [def.wrongEmbed ? def.wrongEmbed() : new EmbedBuilder().setDescription('❌ Wrong!').setColor(0xED4245)],
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       } catch { /* ignore */ }
     }

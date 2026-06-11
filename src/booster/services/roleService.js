@@ -25,10 +25,26 @@ export async function editBoosterRole(guild, userId, updates) {
   const discordRole = guild.roles.cache.get(doc.roleId);
   if (!discordRole) throw new Error('Discord role no longer exists. Try `.booster restore`.');
   await assertBoundary(guild, discordRole);
+
   const patch = {};
-  if (updates.name)  { patch.name   = updates.name;  doc.name  = updates.name;  }
-  if (updates.color) { patch.colors = [updates.color]; doc.color = updates.color; }
-  if (updates.icon !== undefined) { patch.icon = updates.icon; doc.icon = updates.icon; }
+
+  if (updates.name) {
+    patch.name = updates.name;
+    doc.name   = updates.name;
+  }
+
+  if (updates.color) {
+    // When a single color is set via template/command, clear any existing gradient
+    patch.colors         = [updates.color];
+    doc.color            = updates.color;
+    doc.colorSecondary   = null;
+  }
+
+  if (updates.icon !== undefined) {
+    patch.icon = updates.icon;
+    doc.icon   = updates.icon;
+  }
+
   await discordRole.edit(patch);
   await doc.save();
   return { doc, discordRole };

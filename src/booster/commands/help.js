@@ -5,77 +5,87 @@ const PAGES = {
     .setTitle('🌸 Takina Booster Bot — Help Menu')
     .setDescription('Use the buttons below to browse help sections, or type `.help <section>`.')
     .addFields(
-      { name: '🎨 Role Setup',    value: '`.help rolesetup` — Set up your custom role',               inline: true },
-      { name: '🎮 Booster',       value: '`.help booster` — Dashboard, VCs, sharing, backups',        inline: true },
-      { name: '⚙️ Settings',      value: '`.help settings` — Admin panel, boundaries, toggles',       inline: true },
+      { name: '🎨 Booster Commands', value: '`.help booster` — Custom roles, VCs, templates, backups', inline: true },
+      { name: '⚙️ Admin Panel',      value: '`.help admin` — `/bsetup` slash command guide',           inline: true },
+      { name: '🗳️ Voting',           value: '`.help vote` — Featured role voting system',              inline: true },
+      { name: '🏆 Hall of Fame',     value: '`.help hof` — Leaderboard & featured history',           inline: true },
     )
-    .setFooter({ text: 'Prefix: .  |  Only boosters can use booster commands.' }),
+    .setFooter({ text: 'Prefix: .  |  Only boosters can use booster commands. Admins use /bsetup.' }),
 
-  rolesetup: () => new EmbedBuilder().setColor(0xF47FFF).setTitle('🎨 Role Commands')
-    .setDescription(
-      'Run `.role setup` to open the persistent role editor.\n\n' +
-      'The embed stays live — click any option, send your input, and the embed updates instantly. ' +
-      'Nothing is applied to Discord until you press **Save**.'
-    )
-    .addFields(
-      { name: '`.role setup`',          value: 'Open (or reopen) your role editor. Loads existing values if you already have a role.' },
-      { name: '1️⃣ Name',                value: 'Click → send a message → role name is updated in the embed.' },
-      { name: '2️⃣ Colors',              value: 'Click → send one hex (`#FF6793`) **or** two hexes (`#FF6793 #FF8E3A`) for a gradient. Both colors are stored.' },
-      { name: '3️⃣ Icon',                value: 'Click → send a unicode emoji, a custom Discord emoji `<:name:id>`, or upload a PNG/JPG/WEBP image (max 256 KB).' },
-      { name: '4️⃣ Preview',             value: 'Shows your current name, colors, and icon before saving.' },
-      { name: '5️⃣ Save',                value: 'Creates or updates your Discord role with all the settings above.' },
-      { name: '📏 Role Boundaries',      value: 'Your role is always placed inside the admin-configured boundary — above game and auto-assign roles so your icon shows in chat.' },
-      { name: '`.role give @user`',     value: 'Give your custom role to another member. They can wear it too.' },
-      { name: '`.role remove @user`',   value: 'Take your custom role away from a member you previously gave it to.' },
-      { name: '`.role removeme`',       value: 'Remove yourself from a custom role that was shared with you.' },
-    ),
-
-  booster: () => new EmbedBuilder().setColor(0xF47FFF).setTitle('🎮 Booster Commands')
+  booster: () => new EmbedBuilder().setColor(0xF47FFF).setTitle('🎨 Booster Commands')
+    .setDescription('Run `.role setup` to open the role creation wizard.')
     .addFields(
       { name: '`.booster`',                       value: 'Open your personal dashboard' },
-      { name: '`.booster request-vc`',            value: 'Request a custom voice channel' },
+      { name: '`.role setup`',                    value: 'Create or edit your custom role (wizard)' },
+      { name: '`.booster edit name <name>`',      value: 'Rename your custom role' },
+      { name: '`.booster edit color <#hex>`',     value: 'Change your role color (e.g. `#FF6B35`)' },
       { name: '`.booster share add @user`',       value: 'Let another member wear your role' },
       { name: '`.booster share remove @user`',    value: 'Remove a member from your role' },
       { name: '`.booster share list`',            value: 'Show who has access to your role' },
       { name: '`.booster template list`',         value: 'Browse available color templates' },
-      { name: '`.booster template apply <name>`', value: 'Apply a template color to your role' },
+      { name: '`.booster template apply <name>`', value: 'Apply a template to your role' },
       { name: '`.booster backup`',                value: 'Save a backup of your role and VC' },
       { name: '`.booster restore`',               value: 'Restore your role and VC from backup' },
-      { name: '`.booster export`',                value: 'Download your backup as a JSON file' },
-      { name: '`.booster role delete`',           value: 'Soft-delete your custom role (data kept for restore)' },
-      { name: '`.booster vc delete`',             value: 'Delete your custom voice channel' },
+      { name: '`.booster vote`',                  value: 'Vote for a booster role to be featured' },
+      { name: '`.booster vote status`',           value: 'See the current vote standings' },
+      { name: '`.booster hof`',                   value: 'View the Hall of Fame' },
+      { name: '`.booster role delete`',           value: 'Soft-delete your custom role (data kept)' },
+      { name: '`.booster vc delete`',             value: 'Delete your custom VC' },
     ),
 
-  settings: () => new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Settings Commands')
-    .setDescription('Admin only — requires Manage Guild permission.')
+  admin: () => new EmbedBuilder().setColor(0x5865F2).setTitle('⚙️ Admin Panel — `/bsetup`')
+    .setDescription(
+      'Admins with **Manage Server** permission can configure the booster system using the `/bsetup` slash command.\n\n' +
+      'The panel has the following sections:'
+    )
     .addFields(
-      { name: '`.settings panel`',                         value: 'Open the full settings dashboard with feature toggles' },
-      { name: '`.settings toggle <feature>`',              value: 'Enable or disable a feature (see panel for feature names)' },
-      { name: '`.settings boundaries`',                    value: 'View current upper/lower role boundaries' },
-      { name: '`.settings boundaries set @upper @lower`',  value: 'Set the two boundary roles — bot only touches roles between them' },
-      { name: '`.settings templates list`',                value: 'List all color templates' },
-      { name: '`.settings templates add <name> <#color>`', value: 'Add a custom template' },
-      { name: '`.settings templates remove <name>`',       value: 'Remove a custom template' },
-      { name: '`.settings history`',                       value: 'View the audit log (last 10 actions)' },
-      { name: '`.settings log #channel`',                  value: 'Set a channel for bot action logs' },
+      { name: '📊 Overview',       value: 'Summary of active roles, features, and current config' },
+      { name: '🎛️ Features',       value: 'Toggle individual features on/off (custom roles, VC, voting, etc.)' },
+      { name: '🔒 Required Role',  value: 'Set a role members MUST have to keep their booster role. If removed, their role is soft-deleted automatically.' },
+      { name: '📏 Boundaries',     value: 'Set upper/lower Discord role boundaries — booster roles are placed between them' },
+      { name: '🔄 Rotation',       value: 'Configure automatic role rotation (featured rotation + boundary re-positioning)' },
+      { name: '📝 Logging',        value: 'Set a channel to receive audit log messages for all booster actions' },
+      { name: '🗑️ Retention',      value: 'How long soft-deleted role data is kept before permanent removal' },
+      { name: '⚙️ System',         value: 'Purge data, reset settings, or view diagnostic info' },
+    )
+    .setFooter({ text: 'Old prefix commands: .settings panel | .settings boundaries | .settings toggle <feature>' }),
+
+  vote: () => new EmbedBuilder().setColor(0xFEE75C).setTitle('🗳️ Voting System')
+    .setDescription('Members vote for which booster role gets featured each week.')
+    .addFields(
+      { name: 'How it works', value: '1. Admin starts a session via `/bsetup` → Rotation\n2. Members vote for their favourite role\n3. Most-voted role becomes featured' },
+      { name: '`.booster vote`',        value: 'Cast or change your vote' },
+      { name: '`.booster vote status`', value: 'See current standings' },
+      { name: '`.settings vote start`', value: 'Admin: start a new vote session' },
+      { name: '`.settings vote end`',   value: 'Admin: end the session early' },
+    ),
+
+  hof: () => new EmbedBuilder().setColor(0xFFD700).setTitle('🏆 Hall of Fame')
+    .setDescription('A permanent record of every featured booster role.')
+    .addFields(
+      { name: '`.booster hof`', value: 'View the featured role leaderboard' },
+      { name: 'Tracks',         value: '• Featured roles\n• Total votes\n• Auto-rotation vs vote wins' },
     ),
 };
 
 function pageButtons(current) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('booster_help_main').setLabel('Home').setStyle(current === 'main' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('booster_help_rolesetup').setLabel('Role Setup').setStyle(current === 'rolesetup' ? ButtonStyle.Primary : ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('booster_help_booster').setLabel('Booster').setStyle(current === 'booster' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('booster_help_settings').setLabel('Settings').setStyle(current === 'settings' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('booster_help_admin').setLabel('Admin /bsetup').setStyle(current === 'admin' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('booster_help_vote').setLabel('Voting').setStyle(current === 'vote' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('booster_help_hof').setLabel('Hall of Fame').setStyle(current === 'hof' ? ButtonStyle.Primary : ButtonStyle.Secondary),
   );
 }
 
 export async function execute(message, args) {
   const section = (args[0] ?? 'main').toLowerCase();
-  const page    = PAGES[section] ?? PAGES.main;
-  return message.channel.send({ embeds: [page()], components: [pageButtons(section)] });
+  // allow "settings" as alias for "admin"
+  const page = PAGES[section] ?? PAGES[section === 'settings' ? 'admin' : 'main'] ?? PAGES.main;
+  return message.channel.send({ embeds: [page()], components: [pageButtons(section === 'settings' ? 'admin' : section)] });
 }
 
 export function getPage(section) {
-  return { embed: (PAGES[section] ?? PAGES.main)(), row: pageButtons(section) };
+  const key = section === 'settings' ? 'admin' : section;
+  return { embed: (PAGES[key] ?? PAGES.main)(), row: pageButtons(key) };
 }

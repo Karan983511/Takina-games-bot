@@ -19,29 +19,30 @@ import { normalizeHex } from '../utils/validators.js';
 import { errorEmbed, successEmbed } from '../utils/embeds.js';
 import { audit } from '../utils/logger.js';
 
-
 // ─── In-memory session store (per user per guild) ─────────────────────────────
-// shape: { name, color1, color2, iconType, iconValue, messageId, channelId }
 const sessions = new Map();
 
-function sessionKey(guildId, userId) {
-  return `${guildId}:${userId}`;
+function sessionKey(guildId, userId) { return `${guildId}:${userId}`; }
+
+export function getSession(guildId, userId)          { return sessions.get(sessionKey(guildId, userId)) ?? null; }
+export function setSession(guildId, userId, data)    { sessions.set(sessionKey(guildId, userId), { ...data }); }
+export function clearSession(guildId, userId)        { sessions.delete(sessionKey(guildId, userId)); }
+
+// ─── Boost-level icon support check ──────────────────────────────────────────
+function supportsRoleIcons(guild) {
+  // premiumTier: 0 = none, 1 = level 1, 2 = level 2, 3 = level 3
+  return guild.premiumTier >= 2;
 }
 
-export function getSession(guildId, userId) {
-  return sessions.get(sessionKey(guildId, userId)) ?? null;
-}
-
-export function setSession(guildId, userId, data) {
-  sessions.set(sessionKey(guildId, userId), { ...data });
-}
-
-export function clearSession(guildId, userId) {
-  sessions.delete(sessionKey(guildId, userId));
+// ─── Strip icon from roleData if server can't support it ─────────────────────
+function stripIconIfUnsupported(guild, roleData) {
+  if (supportsRoleIcons(guild)) return { stripped: false };
+  delete roleData.icon;
+  delete roleData.unicodeEmoji;
+  return { stripped: true };
 }
 
 // ─── Build the setup embed ────────────────────────────────────────────────────
-
 function buildSetupEmbed(session) {
   const name   = session.name   ?? '*Not set*';
   const color1 = session.color1 ?? null;
@@ -53,12 +54,10 @@ function buildSetupEmbed(session) {
 
   let iconDisplay = '*Not set*';
   if (session.iconType === 'emoji')  iconDisplay = session.iconValue;
-  if (session.iconType === 'custom') iconDisplay = session.iconValue;   // <:name:id>
+  if (session.iconType === 'custom') iconDisplay = session.iconValue;
   if (session.iconType === 'image')  iconDisplay = '✅ Image uploaded';
 
-  const embedColor = color1
-    ? parseInt(color1.replace('#', ''), 16)
-    : 0x5865F2;
+  const embedColor = color1 ? parseInt(color1.replace('#', ''), 16) : 0x5865F2;
 
   return new EmbedBuilder()
     .setColor(embedColor)
@@ -78,50 +77,30 @@ function buildSetupEmbed(session) {
     .setTimestamp();
 }
 
-// ─── Build the action row ─────────────────────────────────────────────────────
-
 function buildSetupRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('rolesetup_name')
-      .setLabel('1️⃣ Name')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('rolesetup_colors')
-      .setLabel('2️⃣ Colors')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('rolesetup_icon')
-      .setLabel('3️⃣ Icon')
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('rolesetup_preview')
-      .setLabel('4️⃣ Preview')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('rolesetup_save')
-      .setLabel('5️⃣ Save')
-      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('rolesetup_name').setLabel('1️⃣ Name').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rolesetup_colors').setLabel('2️⃣ Colors').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rolesetup_icon').setLabel('3️⃣ Icon').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rolesetup_preview').setLabel('4️⃣ Preview').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('rolesetup_save').setLabel('5️⃣ Save').setStyle(ButtonStyle.Success),
   );
 }
 
 // ─── Entry point: .role setup ────────────────────────────────────────────────
-
 export async function execute(message) {
   const { guild, author } = message;
   const key = sessionKey(guild.id, author.id);
 
-  // Load existing role data if the user already has one
   const existing = await BoosterRole.findOne({ guildId: guild.id, userId: author.id, active: true });
 
   let session = sessions.get(key);
   if (!session) {
-    // Bug fix: detect whether restored icon is a custom emoji or unicode
     const isCustomEmoji = existing?.icon ? /^<a?:\w+:\d+>$/.test(existing.icon) : false;
     session = {
       name:      existing?.name           ?? null,
       color1:    existing?.color          ?? null,
-      color2:    existing?.colorSecondary ?? null,  // Bug fix: restore gradient second color
+      color2:    existing?.colorSecondary ?? null,
       iconType:  null,
       iconValue: null,
       ...(existing?.icon
@@ -136,39 +115,31 @@ export async function execute(message) {
 
   const embed = buildSetupEmbed(session);
   const row   = buildSetupRow();
-
-  const sent = await message.channel.send({ embeds: [embed], components: [row] });
-  session.messageId  = sent.id;
-  session.channelId  = sent.channelId;
+  const sent  = await message.channel.send({ embeds: [embed], components: [row] });
+  session.messageId = sent.id;
+  session.channelId = sent.channelId;
   sessions.set(key, session);
 }
 
-// ─── Shared: refresh the setup embed after a change ──────────────────────────
-
+// ─── Refresh the setup embed ──────────────────────────────────────────────────
 export async function refreshSetupMessage(channel, session) {
   if (!session.messageId) return;
   try {
     const msg = await channel.messages.fetch(session.messageId);
     await msg.edit({ embeds: [buildSetupEmbed(session)], components: [buildSetupRow()] });
-  } catch {
-    // Message may have been deleted — not fatal
-  }
+  } catch { /* deleted — not fatal */ }
 }
 
-// ─── Build the preview embed ──────────────────────────────────────────────────
-
+// ─── Preview embed ────────────────────────────────────────────────────────────
 function buildPreviewEmbed(session) {
   const name   = session.name   ?? '*(unnamed)*';
   const color1 = session.color1 ?? '#99AAB5';
   const color2 = session.color2 ?? null;
-
   const colorLine = color2 ? `${color1} → ${color2}` : color1;
-
   let iconLine = 'None';
   if (session.iconType === 'emoji')  iconLine = session.iconValue;
   if (session.iconType === 'custom') iconLine = session.iconValue;
   if (session.iconType === 'image')  iconLine = '📷 Uploaded image';
-
   return new EmbedBuilder()
     .setColor(parseInt(color1.replace('#', ''), 16))
     .setTitle(`🎨 Preview — ${name}`)
@@ -181,8 +152,7 @@ function buildPreviewEmbed(session) {
     .setFooter({ text: 'Click Save in the setup menu to apply these settings.' });
 }
 
-// ─── Interaction handler (called from interactionCreate) ──────────────────────
-
+// ─── Interaction handler ──────────────────────────────────────────────────────
 export async function handleRoleSetupInteraction(interaction, client) {
   const id     = interaction.customId;
   const userId = interaction.user.id;
@@ -204,10 +174,8 @@ export async function handleRoleSetupInteraction(interaction, client) {
     setSession(guild.id, userId, session);
     return interaction.reply({
       embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('1️⃣ Set Role Name')
-          .setDescription('Send your desired role name in this channel.\n\nExample:\n```\nKaran Crown\n```'),
+        new EmbedBuilder().setColor(0x5865F2).setTitle('1️⃣ Set Role Name')
+          .setDescription('Send your desired role name in this channel.\n\nExample:\n```\nShadow Crown\n```'),
       ],
       flags: MessageFlags.Ephemeral,
     });
@@ -219,13 +187,11 @@ export async function handleRoleSetupInteraction(interaction, client) {
     setSession(guild.id, userId, session);
     return interaction.reply({
       embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('2️⃣ Set Colors')
+        new EmbedBuilder().setColor(0x5865F2).setTitle('2️⃣ Set Colors')
           .setDescription(
             'Send **one** hex color for a solid color:\n```\n#ff6793\n```\n' +
-            'Or **two** hex colors for a gradient:\n```\n#ff6793 #ff8e3a\n```\n' +
-            '*Two colors will create a gradient effect on your role.*'
+            'Or **two** hex colors for a gradient display:\n```\n#ff6793 #ff8e3a\n```\n' +
+            '*The first color becomes the Discord role color.*'
           ),
       ],
       flags: MessageFlags.Ephemeral,
@@ -234,164 +200,104 @@ export async function handleRoleSetupInteraction(interaction, client) {
 
   // ── 3️⃣ Icon ─────────────────────────────────────────────────────────────────
   if (id === 'rolesetup_icon') {
+    const freshGuild = await guild.fetch().catch(() => guild);
+    const canUseIcon = freshGuild.premiumTier >= 2;
     session.awaitingInput = 'icon';
     setSession(guild.id, userId, session);
+
+    const desc = canUseIcon
+      ? (
+        'Send one of the following:\n\n' +
+        '• **A unicode emoji** — `😀` `👑` `⭐`\n' +
+        '• **A custom Discord emoji** — `<:crown:123456789>`\n' +
+        '• **An image** — Upload a PNG, JPG, or WEBP file (max 256 KB)'
+      )
+      : (
+        '⚠️ **Your server is not at boost level 2**, so role icons are disabled by Discord.\n\n' +
+        'You can still set an icon here — it will be saved and applied automatically once your server reaches level 2.\n\n' +
+        '• **A unicode emoji** — `😀` `👑` `⭐`\n' +
+        '• **A custom Discord emoji** — `<:crown:123456789>`\n' +
+        '• **An image** — Upload a PNG, JPG, or WEBP file (max 256 KB)'
+      );
+
     return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('3️⃣ Set Icon')
-          .setDescription(
-            'Send one of the following:\n\n' +
-            '• **A unicode emoji** — `😀` `👑` `⭐`\n' +
-            '• **A custom Discord emoji** — `<:crown:123456789>`\n' +
-            '• **An image** — Upload a PNG, JPG, or WEBP file\n\n' +
-            '> Role icons require your server to be at boost level 2+.'
-          ),
-      ],
-      flags: MessageFlags.Ephemeral,
+      embeds: [new EmbedBuilder().setColor(canUseIcon ? 0x5865F2 : 0xFEE75C).setTitle('3️⃣ Set Icon').setDescription(desc)],
+      flags:  MessageFlags.Ephemeral,
     });
   }
 
   // ── 4️⃣ Preview ──────────────────────────────────────────────────────────────
   if (id === 'rolesetup_preview') {
-    return interaction.reply({
-      embeds: [buildPreviewEmbed(session)],
-      flags:  MessageFlags.Ephemeral,
-    });
+    return interaction.reply({ embeds: [buildPreviewEmbed(session)], flags: MessageFlags.Ephemeral });
   }
 
   // ── 5️⃣ Save ─────────────────────────────────────────────────────────────────
   if (id === 'rolesetup_save') {
-    if (!session.name) {
-      return interaction.reply({
-        embeds: [errorEmbed('Please set a **name** before saving.')],
-        flags:  MessageFlags.Ephemeral,
-      });
-    }
-    if (!session.color1) {
-      return interaction.reply({
-        embeds: [errorEmbed('Please set at least one **color** before saving.')],
-        flags:  MessageFlags.Ephemeral,
-      });
-    }
+    if (!session.name)   return interaction.reply({ embeds: [errorEmbed('Please set a **name** before saving.')],  flags: MessageFlags.Ephemeral });
+    if (!session.color1) return interaction.reply({ embeds: [errorEmbed('Please set at least one **color** before saving.')], flags: MessageFlags.Ephemeral });
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       const existing = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
 
+      // ── Helper: build icon fields ──────────────────────────────────────────
+      // Always fetch fresh guild so premiumTier is accurate
+      const freshGuild  = await guild.fetch().catch(() => guild);
+      const canUseIcons = freshGuild.premiumTier >= 2;
+
+      async function resolveIconFields() {
+        if (session.iconType === 'custom') {
+          const match = session.iconValue?.match(/^<a?:\w+:(\d+)>$/);
+          if (match) {
+            const ext = session.iconValue.startsWith('<a:') ? 'gif' : 'png';
+            try {
+              const r   = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
+              const buf = Buffer.from(await r.arrayBuffer());
+              // Must use data URI — Discord.js encodes raw Buffers as image/jpg regardless of format
+              return { icon: `data:image/${ext};base64,${buf.toString('base64')}`, unicodeEmoji: null };
+            } catch { return {}; }
+          }
+        }
+        if (session.iconType === 'emoji') return { unicodeEmoji: session.iconValue, icon: null };
+        // image: iconValue is already a data URI (set at upload time)
+        if (session.iconType === 'image' && session.iconValue) return { icon: session.iconValue, unicodeEmoji: null };
+        return {};
+      }
+
+      const iconFields  = await resolveIconFields();
+      const iconSaved   = session.iconType && Object.keys(iconFields).length > 0;
+      const iconSkipped = iconSaved && !canUseIcons;
+      // Only spread icon into the Discord API call if the server actually supports role icons
+      const appliedFields = (iconSaved && canUseIcons) ? iconFields : {};
+
       if (existing) {
         // ── Edit existing role ───────────────────────────────────────────────
         const discordRole = guild.roles.cache.get(existing.roleId);
-        if (!discordRole) throw new Error('Your Discord role no longer exists. Try `.booster restore`.');
+        if (!discordRole) throw new Error('Your Discord role no longer exists.');
         await assertBoundary(guild, discordRole);
 
-        const patch = { name: session.name, colors: session.color2 ? [session.color1, session.color2] : [session.color1] };
-
-        if (session.iconType === 'custom') {
-          // Bug fix: custom emoji needs its image fetched and passed as a buffer
-          const match = session.iconValue.match(/^<a?:\w+:(\d+)>$/);
-          if (match) {
-            const ext = session.iconValue.startsWith('<a:') ? 'gif' : 'png';
-            try {
-              const res = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
-              patch.icon = Buffer.from(await res.arrayBuffer());
-              patch.unicodeEmoji = null;
-            } catch { /* skip icon if fetch fails */ }
-          }
-        } else if (session.iconType === 'emoji') {
-          patch.unicodeEmoji = session.iconValue;
-          patch.icon = null;
-        } else if (session.iconType === 'image' && session.iconBuffer) {
-          patch.icon = session.iconBuffer;
-          patch.unicodeEmoji = null;
-        }
-
-        await discordRole.edit(patch);
+        await discordRole.edit({ name: session.name, color: session.color1, ...appliedFields });
 
         existing.name           = session.name;
         existing.color          = session.color1;
-        existing.colorSecondary = session.color2 ?? null;  // Bug fix: persist secondary color
-        existing.iconType       = session.iconType ?? 'none';
-        if (session.iconType === 'emoji' || session.iconType === 'custom') existing.icon = session.iconValue;
-        else if (session.iconType === 'image') existing.icon = null;
+        existing.colorSecondary = session.color2 ?? null;
+        existing.iconType = session.iconType ?? 'none';
+        existing.icon     = session.iconValue ?? null; // data URI for images, emoji string for others
         await existing.save();
 
-        await audit(client, guild.id, userId, 'ROLE_EDITED', {
-          name:  session.name,
-          color: session.color1,
-        });
-
+        await audit(client, guild.id, userId, 'ROLE_EDITED', { name: session.name, color: session.color1 });
         clearSession(guild.id, userId);
-        return interaction.editReply({
-          embeds: [successEmbed(`Your role **${session.name}** has been updated! ${discordRole}`)],
-        });
+
+        const note = iconSkipped ? '\n\n> 🔒 Icon saved but not applied — your server needs boost level 2 for role icons.' : '';
+        return interaction.editReply({ embeds: [successEmbed(`Your role **${session.name}** has been updated! ${discordRole}${note}`)] });
       } else {
         // ── Create new role ──────────────────────────────────────────────────
         const position = await getInsertPosition(guild);
-        // Do not pass position to create() — Discord ignores it for new roles.
-        // Create first, then explicitly move the role into the boundary.
-        const roleData = {
-          name:        session.name,
-          colors:      session.color2 ? [session.color1, session.color2] : [session.color1],
-          hoist:       false,
-          mentionable: false,
-        };
+        const roleData = { name: session.name, color: session.color1, hoist: false, mentionable: false, ...appliedFields };
 
-        if (session.iconType === 'custom') {
-          // Bug fix: custom emoji needs its image fetched and passed as a buffer
-          const match = session.iconValue.match(/^<a?:\w+:(\d+)>$/);
-          if (match) {
-            const ext = session.iconValue.startsWith('<a:') ? 'gif' : 'png';
-            try {
-              const res = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
-              roleData.icon = Buffer.from(await res.arrayBuffer());
-            } catch { /* skip icon if fetch fails */ }
-          }
-        } else if (session.iconType === 'emoji') {
-          roleData.unicodeEmoji = session.iconValue;
-        } else if (session.iconType === 'image' && session.iconBuffer) {
-          roleData.icon = session.iconBuffer;
-        }
-
-        let discordRole;
-        try {
-          discordRole = await guild.roles.create(roleData);
-          await discordRole.setPosition(position).catch(() => {}); // Move to top of boundary
-        } catch (err) {
-          // Icon may be rejected — create without it and report
-          if (err.message?.toLowerCase().includes('icon') || err.code === 50013) {
-            delete roleData.icon;
-            delete roleData.unicodeEmoji;
-            discordRole = await guild.roles.create(roleData);
-            await discordRole.setPosition(position).catch(() => {}); // Move to top of boundary
-            await interaction.editReply({
-              embeds: [
-                new EmbedBuilder()
-                  .setColor(0xFEE75C)
-                  .setTitle('⚠️ Role created without icon')
-                  .setDescription(
-                    `${discordRole} was created, but Discord rejected the icon.\n\n` +
-                    `This usually happens when the server isn't at boost level 2+, ` +
-                    `or the image format is unsupported. You can set an icon later.`
-                  ),
-              ],
-            });
-            // Still save the doc (without icon since it was rejected)
-            await BoosterRole.findOneAndUpdate(
-              { guildId: guild.id, userId },
-              { $set: { roleId: discordRole.id, name: session.name, color: session.color1, colorSecondary: session.color2 ?? null, iconType: 'none', icon: null, active: true, softDeletedAt: null } },
-              { upsert: true, new: true }
-            );
-            const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
-            if (member) await member.roles.add(discordRole).catch(() => {});
-            await audit(client, guild.id, userId, 'ROLE_CREATED', { name: session.name, color: session.color1, roleId: discordRole.id });
-            clearSession(guild.id, userId);
-            return;
-          }
-          throw err;
-        }
+        const discordRole = await guild.roles.create(roleData);
+        await discordRole.setPosition(position).catch(() => {});
 
         await BoosterRole.findOneAndUpdate(
           { guildId: guild.id, userId },
@@ -400,9 +306,9 @@ export async function handleRoleSetupInteraction(interaction, client) {
               roleId:         discordRole.id,
               name:           session.name,
               color:          session.color1,
-              colorSecondary: session.color2 ?? null,  // Bug fix: persist secondary color
+              colorSecondary: session.color2 ?? null,
               iconType:       session.iconType ?? 'none',
-              icon:           (session.iconType === 'emoji' || session.iconType === 'custom') ? session.iconValue : null,
+              icon:           session.iconValue ?? null,
               active:         true,
               softDeletedAt:  null,
             },
@@ -413,35 +319,25 @@ export async function handleRoleSetupInteraction(interaction, client) {
         const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
         if (member) await member.roles.add(discordRole).catch(() => {});
 
-        await audit(client, guild.id, userId, 'ROLE_CREATED', {
-          name:   session.name,
-          color:  session.color1,
-          roleId: discordRole.id,
-        });
-
+        await audit(client, guild.id, userId, 'ROLE_CREATED', { name: session.name, color: session.color1, roleId: discordRole.id });
         clearSession(guild.id, userId);
-        return interaction.editReply({
-          embeds: [successEmbed(`Your custom role **${session.name}** has been created! ${discordRole}`)],
-        });
+
+        const note = iconSkipped ? '\n\n> 🔒 Icon saved but not applied — your server needs boost level 2 for role icons.' : '';
+        return interaction.editReply({ embeds: [successEmbed(`Your custom role **${session.name}** has been created! ${discordRole}${note}`)] });
       }
     } catch (err) {
       console.error('[roleSetup] Save error:', err);
-      return interaction.editReply({
-        embeds: [errorEmbed(`Failed to save: ${err.message}`)],
-      });
+      return interaction.editReply({ embeds: [errorEmbed(`Failed to save: ${err.message}`)] });
     }
   }
 
   return false;
 }
 
-// ─── Message input handler (called from messageCreate) ───────────────────────
-// Returns true if it consumed the message, false otherwise.
-
+// ─── Message input handler ────────────────────────────────────────────────────
 export async function handleRoleSetupMessage(message) {
   const { guild, author, channel } = message;
   const session = getSession(guild.id, author.id);
-
   if (!session || !session.awaitingInput) return false;
 
   const input = session.awaitingInput;
@@ -449,20 +345,12 @@ export async function handleRoleSetupMessage(message) {
 
   if (input === 'name') {
     const name = message.content.trim().slice(0, 100);
-    if (!name) {
-      await message.reply({ embeds: [errorEmbed('Name cannot be empty.')] });
-      return true;
-    }
+    if (!name) { await message.reply({ embeds: [errorEmbed('Name cannot be empty.')] }); return true; }
     session.name = name;
     setSession(guild.id, author.id, session);
-
-    // Delete the user's message for cleanliness (best-effort)
     await message.delete().catch(() => {});
-
-    await channel.send({
-      embeds: [successEmbed(`Name set to **${name}**.`)],
-    }).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
-
+    await channel.send({ embeds: [successEmbed(`Name set to **${name}**.`)] })
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
     await refreshSetupMessage(channel, session);
     return true;
   }
@@ -471,22 +359,18 @@ export async function handleRoleSetupMessage(message) {
     const parts = message.content.trim().split(/\s+/);
     const hex1  = normalizeHex(parts[0]);
     const hex2  = parts[1] ? normalizeHex(parts[1]) : null;
-
     await message.delete().catch(() => {});
 
     if (!hex1) {
-      await channel.send({
-        embeds: [errorEmbed('Invalid hex color. Use format `#FF6793` or `#FF6793 #FF8E3A`.')],
-      }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-      session.awaitingInput = 'colors'; // re-prompt
+      await channel.send({ embeds: [errorEmbed('Invalid hex color. Use format `#FF6793` or `#FF6793 #FF8E3A`.')]})
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      session.awaitingInput = 'colors';
       setSession(guild.id, author.id, session);
       return true;
     }
-
     if (parts[1] && !hex2) {
-      await channel.send({
-        embeds: [errorEmbed(`Second color \`${parts[1]}\` is invalid. Use a proper hex code like \`#FF8E3A\`.`)],
-      }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      await channel.send({ embeds: [errorEmbed(`Second color \`${parts[1]}\` is invalid. Use a proper hex code like \`#FF8E3A\`.`)]})
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
       session.awaitingInput = 'colors';
       setSession(guild.id, author.id, session);
       return true;
@@ -495,12 +379,9 @@ export async function handleRoleSetupMessage(message) {
     session.color1 = hex1;
     session.color2 = hex2 ?? null;
     setSession(guild.id, author.id, session);
-
     const colorMsg = hex2 ? `${hex1} → ${hex2}` : hex1;
-    await channel.send({
-      embeds: [successEmbed(`Color set to **${colorMsg}**.`)],
-    }).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
-
+    await channel.send({ embeds: [successEmbed(`Color set to **${colorMsg}**.`)] })
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
     await refreshSetupMessage(channel, session);
     return true;
   }
@@ -508,91 +389,81 @@ export async function handleRoleSetupMessage(message) {
   if (input === 'icon') {
     await message.delete().catch(() => {});
 
-    // ── Image upload? ──────────────────────────────────────────────────────
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
-      const contentType = att.contentType ?? '';
       const allowed = ['image/png', 'image/jpeg', 'image/webp'];
-
-      if (!allowed.some(t => contentType.startsWith(t))) {
-        await channel.send({
-          embeds: [errorEmbed('Invalid file type. Only PNG, JPG, or WEBP images are supported.')],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      if (!allowed.some(t => (att.contentType ?? '').startsWith(t))) {
+        await channel.send({ embeds: [errorEmbed('Invalid file type. Only PNG, JPG, or WEBP images are supported.')] })
+          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session);
         return true;
       }
-
       if (att.size > 256 * 1024) {
-        await channel.send({
-          embeds: [errorEmbed('Image too large. Role icons must be under 256 KB.')],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+        await channel.send({ embeds: [errorEmbed('Image too large. Role icons must be under 256 KB.')] })
+          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session);
         return true;
       }
-
-      // Fetch the image buffer for later use at Save time
       try {
         const res = await fetch(att.url);
-        const buf = Buffer.from(await res.arrayBuffer());
+        if (!res.ok) throw new Error(`fetch ${res.status}`);
+        const buf  = Buffer.from(await res.arrayBuffer());
+        // Strip params ("image/png; charset=utf-8" → "image/png"), convert to data URI now
+        // so we never pass a raw Buffer to Discord.js (it always encodes those as image/jpg)
+        const ct   = (att.contentType ?? 'image/png').split(';')[0].trim();
+        const b64  = `data:${ct};base64,${buf.toString('base64')}`;
         session.iconType   = 'image';
-        session.iconValue  = att.name;
-        session.iconBuffer = buf;
+        session.iconValue  = b64;   // stored as data URI, not raw Buffer
+        session.iconBuffer = null;
         setSession(guild.id, author.id, session);
-
-        await channel.send({
-          embeds: [successEmbed('✅ Image icon saved. It will be applied when you click **Save**.')],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
-
+        const freshG = await guild.fetch().catch(() => guild);
+        const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
+        await channel.send({ embeds: [successEmbed(`✅ Image icon saved. It will be applied when you click **Save**.${note}`)] })
+          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         await refreshSetupMessage(channel, session);
         return true;
-      } catch (err) {
-        await channel.send({
-          embeds: [errorEmbed('Failed to download your image. Please try again.')],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      } catch {
+        await channel.send({ embeds: [errorEmbed('Failed to download your image. Please try again.')] })
+          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session);
         return true;
       }
     }
 
-    // ── Text — emoji or custom emoji ───────────────────────────────────────
     const text = message.content.trim();
-
-    // Custom Discord emoji: <:name:id> or <a:name:id>
     const customMatch = text.match(/^<a?:\w+:\d+>$/);
     if (customMatch) {
-      session.iconType  = 'custom';
-      session.iconValue = text;
+      session.iconType   = 'custom';
+      session.iconValue  = text;
       session.iconBuffer = null;
       setSession(guild.id, author.id, session);
-
-      await channel.send({
-        embeds: [successEmbed(`Icon set to ${text}.`)],
-      }).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+      const freshG2 = await guild.fetch().catch(() => guild);
+      const note = freshG2.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
+      await channel.send({ embeds: [successEmbed(`Icon set to ${text}.${note}`)] })
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
       await refreshSetupMessage(channel, session);
       return true;
     }
 
-    // Unicode emoji — simple heuristic: non-ASCII single grapheme cluster
     const unicodeEmojiPattern = /^\p{Emoji_Presentation}|\p{Extended_Pictographic}$/u;
     if (unicodeEmojiPattern.test(text) && [...text].length <= 4) {
       session.iconType   = 'emoji';
       session.iconValue  = text;
       session.iconBuffer = null;
       setSession(guild.id, author.id, session);
-
-      await channel.send({
-        embeds: [successEmbed(`Icon set to ${text}.`)],
-      }).then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+      const freshG3 = await guild.fetch().catch(() => guild);
+      const note = freshG3.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
+      await channel.send({ embeds: [successEmbed(`Icon set to ${text}.${note}`)] })
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
       await refreshSetupMessage(channel, session);
       return true;
     }
 
-    await channel.send({
-      embeds: [errorEmbed('Please send a unicode emoji, a custom Discord emoji, or upload a PNG/JPG/WEBP image.')],
-    }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+    await channel.send({ embeds: [errorEmbed('Please send a unicode emoji, a custom Discord emoji, or upload a PNG/JPG/WEBP image.')] })
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
     session.awaitingInput = 'icon';
     setSession(guild.id, author.id, session);
     return true;

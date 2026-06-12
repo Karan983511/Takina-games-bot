@@ -181,10 +181,18 @@ export default {
         if (target.id === author.id) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You can't give your role to yourself.")] });
         const role = await BoosterRole.findOne({ guildId: guild.id, userId: author.id, active: true });
         if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role. Run `.role setup` to create one.")] });
-        if (role.sharedWith.includes(target.id)) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} already has your role.`)] });
+        const dr = guild.roles.cache.get(role.roleId);
+        if (role.sharedWith.includes(target.id)) {
+          // DB says they have it — check if Discord role is actually on them
+          if (dr && target.roles.cache.has(dr.id)) {
+            return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} already has your role.`)] });
+          }
+          // Role was accidentally removed — silently re-add it
+          if (dr) await target.roles.add(dr).catch(() => {});
+          return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Re-gave your role **${role.name}** to ${target} (it was missing from them).`)] });
+        }
         role.sharedWith.push(target.id);
         await role.save();
-        const dr = guild.roles.cache.get(role.roleId);
         if (dr) await target.roles.add(dr).catch(() => {});
         return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Gave your role **${role.name}** to ${target}.`)] });
       }
@@ -205,13 +213,35 @@ export default {
 
       // .role removeme
       if (sub === 'removeme') {
-        const role = await BoosterRole.findOne({ guildId: guild.id, sharedWith: author.id, active: true });
-        if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You're not in anyone's shared role.")] });
-        role.sharedWith = role.sharedWith.filter(id => id !== author.id);
-        await role.save();
-        const dr = guild.roles.cache.get(role.roleId);
-        if (dr) await message.member.roles.remove(dr).catch(() => {});
-        return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed yourself from **${role.name}**.`)] });
+        const roles = await BoosterRole.find({ guildId: guild.id, sharedWith: author.id, active: true });
+        if (!roles.length) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You're not in anyone's shared role.")] });
+        if (roles.length === 1) {
+          const role = roles[0];
+          role.sharedWith = role.sharedWith.filter(id => id !== author.id);
+          await role.save();
+          const dr = guild.roles.cache.get(role.roleId);
+          if (dr) await message.member.roles.remove(dr).catch(() => {});
+          return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed yourself from **${role.name}**.`)] });
+        }
+        // Multiple shared roles — show a select menu
+        const options = roles.slice(0, 25).map(r => {
+          const owner = guild.members.cache.get(r.userId);
+          return new StringSelectMenuOptionBuilder()
+            .setLabel(r.name.slice(0, 100))
+            .setValue(r.roleId)
+            .setDescription(`Owner: ${owner?.user.username ?? r.userId}`);
+        });
+        const row = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`rolerm_select_${author.id}`)
+            .setPlaceholder('Which role do you want to leave?')
+            .setMinValues(1).setMaxValues(1)
+            .addOptions(options),
+        );
+        return message.channel.send({
+          embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('👥 Leave a Shared Role').setDescription(`You have **${roles.length}** shared roles. Pick the one you want to leave:`)],
+          components: [row],
+        });
       }
 
       // Unknown .role subcommand — show role-specific help

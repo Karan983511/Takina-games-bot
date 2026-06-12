@@ -121,6 +121,33 @@ export default {
       return;
     }
 
+    // ── .role removeme select menu ────────────────────────────────────────────
+    if (customId?.startsWith('rolerm_select_')) {
+      const userId = customId.split('_').pop();
+      if (interaction.user.id !== userId) {
+        return interaction.reply({ content: "⛔ This isn't your menu.", flags: MessageFlags.Ephemeral });
+      }
+      const roleId = interaction.values[0];
+      const { default: BoosterRole } = await import('../booster/models/BoosterRole.js');
+      const role = await BoosterRole.findOne({ guildId: interaction.guild.id, roleId, active: true });
+      if (!role || !role.sharedWith.includes(userId)) {
+        return interaction.update({
+          embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription("⚠️ You're no longer in that role (it may have already been removed).")],
+          components: [],
+        });
+      }
+      role.sharedWith = role.sharedWith.filter(id => id !== userId);
+      await role.save();
+      const member = interaction.guild.members.cache.get(userId)
+                  ?? await interaction.guild.members.fetch(userId).catch(() => null);
+      const dr = interaction.guild.roles.cache.get(roleId);
+      if (dr && member) await member.roles.remove(dr).catch(() => {});
+      return interaction.update({
+        embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed yourself from **${role.name}**.`)],
+        components: [],
+      });
+    }
+
     // ── .loot equip/unequip select menu ───────────────────────────────────────
     if (customId?.startsWith('loot_toggle_')) {
       const userId = customId.split('_').pop();

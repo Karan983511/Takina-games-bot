@@ -1,4 +1,5 @@
 import BoosterRole from '../models/BoosterRole.js';
+import BoosterSettings from '../models/BoosterSettings.js';
 import { getInsertPosition, assertBoundary } from '../utils/boundary.js';
 import { log } from '../utils/logger.js';
 
@@ -55,10 +56,6 @@ export async function editBoosterRole(guild, userId, updates) {
   return { doc, discordRole };
 }
 
-/**
- * Admin-only: link a manually created Discord role to a member's booster profile.
- * Once linked the member can use .role give / .role remove on it.
- */
 export async function linkExistingRole(guild, userId, roleId) {
   const discordRole = guild.roles.cache.get(roleId);
   if (!discordRole) throw new Error('That role was not found in this server.');
@@ -70,6 +67,22 @@ export async function linkExistingRole(guild, userId, roleId) {
   const existing = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
   if (existing && !existing.manuallyLinked) {
     throw new Error('This member already has a bot-managed booster role. Have them delete it first with `.role delete`.');
+  }
+
+  // move role inside boundaries so it joins the rotation pool
+  const settings  = await BoosterSettings.findOne({ guildId: guild.id }).lean().catch(() => null);
+  const upperRole = settings?.boundaries?.upperRoleId ? guild.roles.cache.get(settings.boundaries.upperRoleId) : null;
+  const lowerRole = settings?.boundaries?.lowerRoleId ? guild.roles.cache.get(settings.boundaries.lowerRoleId) : null;
+
+  if (upperRole && lowerRole) {
+    const upperPos = upperRole.position;
+    const lowerPos = lowerRole.position;
+    const inBounds = discordRole.position < upperPos && discordRole.position > lowerPos;
+
+    if (!inBounds) {
+      await discordRole.setPosition(lowerPos + 1).catch(() => {});
+      log('info', 'RoleService', `Moved linked role ${roleId} into boundary at position ${lowerPos + 1}`);
+    }
   }
 
   const doc = await BoosterRole.findOneAndUpdate(
@@ -96,10 +109,6 @@ export async function linkExistingRole(guild, userId, roleId) {
   return { doc, discordRole };
 }
 
-/**
- * Admin-only: remove a manually linked role from the booster system.
- * Does NOT delete the Discord role — the admin keeps full control of it.
- */
 export async function unlinkRole(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, manuallyLinked: true, active: true });
   if (!doc) throw new Error('No manually linked role found for that member.');
@@ -109,16 +118,10 @@ export async function unlinkRole(guild, userId) {
   return doc;
 }
 
-/**
- * Called when a member LOSES boost.
- * Deletes the Discord role from the server entirely.
- * Preserves the DB record (name, color, icon, sharedWith) for auto-restoration later.
- */
 export async function handleBoostLost(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
   if (!doc) return null;
 
-  // Manually linked roles are admin-managed — don't auto-delete them on boost loss
   if (doc.manuallyLinked) {
     log('info', 'RoleService', `Boost lost for ${userId} but role is manually linked — skipping auto-delete`);
     return null;
@@ -145,10 +148,6 @@ export async function handleBoostLost(guild, userId) {
 
 export const softDeleteRole = handleBoostLost;
 
-/**
- * Called when a member REGAINS boost.
- * Recreates the Discord role from preserved DB data and reassigns it.
- */
 export async function restoreRole(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: false });
   if (!doc) return null;
@@ -193,7 +192,6 @@ export async function deleteBoosterRole(guild, userId) {
                ?? await guild.members.fetch(memberId).catch(() => null);
         if (m) await m.roles.remove(dr).catch(() => {});
       }
-      // Only delete the Discord role if it wasn't manually linked
       if (!doc.manuallyLinked) {
         await dr.delete('Deleted by owner').catch(() => {});
       }

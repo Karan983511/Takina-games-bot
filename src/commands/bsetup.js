@@ -642,3 +642,5 @@ export async function handleComponent(interaction, client) {
     return interaction.update(payload);
   }
 }
+
+export default { data, execute, handleComponent };

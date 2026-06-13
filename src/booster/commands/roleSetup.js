@@ -55,7 +55,7 @@ function buildSetupEmbed(session) {
   let iconDisplay = '*Not set*';
   if (session.iconType === 'emoji')  iconDisplay = session.iconValue;
   if (session.iconType === 'custom') iconDisplay = session.iconValue;
-  if (session.iconType === 'image')  iconDisplay = '✅ Image uploaded';
+  if (session.iconType === 'image')  iconDisplay = session.iconBuffer ? '📷 Image ready to apply' : '📷 Image (saved — re-upload to change)';
 
   const embedColor = color1 ? parseInt(color1.replace('#', ''), 16) : 0x5865F2;
 
@@ -96,16 +96,20 @@ export async function execute(message) {
 
   let session = sessions.get(key);
   if (!session) {
-    const isCustomEmoji = existing?.icon ? /^<a?:\w+:\d+>$/.test(existing.icon) : false;
-    const isDataURI     = existing?.icon ? existing.icon.startsWith('data:') : false;
+    const isCustomEmoji   = existing?.icon ? /^<a?:\w+:\d+>$/.test(existing.icon) : false;
+    const isDiscordHosted = existing?.icon === 'discord_hosted';
+    const isStaleDataURI  = existing?.icon ? existing.icon.startsWith('data:') : false;
     session = {
       name:      existing?.name           ?? null,
       color1:    existing?.color          ?? null,
       color2:    existing?.colorSecondary ?? null,
       iconType:  null,
       iconValue: null,
-      ...(existing?.icon
-        ? { iconType: isCustomEmoji ? 'custom' : isDataURI ? 'image' : 'emoji', iconValue: existing.icon }
+      iconBuffer: null,
+      iconMime:   null,
+      ...(existing?.icon && !isStaleDataURI
+        ? { iconType: isCustomEmoji ? 'custom' : isDiscordHosted ? 'image' : 'emoji',
+            iconValue: isDiscordHosted ? 'discord_hosted' : existing.icon }
         : {}),
       awaitingInput: null,
       messageId:     null,
@@ -140,7 +144,7 @@ function buildPreviewEmbed(session) {
   let iconLine = 'None';
   if (session.iconType === 'emoji')  iconLine = session.iconValue;
   if (session.iconType === 'custom') iconLine = session.iconValue;
-  if (session.iconType === 'image')  iconLine = '📷 Uploaded image';
+  if (session.iconType === 'image')  iconLine = session.iconBuffer ? '📷 Custom image' : '📷 Image (Discord-hosted)';
   return new EmbedBuilder()
     .setColor(parseInt(color1.replace('#', ''), 16))
     .setTitle(`🎨 Preview — ${name}`)
@@ -261,8 +265,28 @@ export async function handleRoleSetupInteraction(interaction, client) {
           }
         }
         if (session.iconType === 'emoji') return { unicodeEmoji: session.iconValue, icon: null };
-        // image: iconValue is already a data URI (set at upload time)
-        if (session.iconType === 'image' && session.iconValue) return { icon: session.iconValue, unicodeEmoji: null };
+        // image: temp-emoji trick — upload buffer as emoji, fetch CDN URL, delete emoji
+        // Falls back to direct data URI if the bot lacks MANAGE_EMOJIS permission or guild has no slots
+        if (session.iconType === 'image' && session.iconBuffer) {
+          try {
+            const tempEmoji = await guild.emojis.create({
+              attachment: session.iconBuffer,
+              name: 'tmpricon',
+              reason: 'Temporary upload for role icon',
+            });
+            const ext = tempEmoji.animated ? 'gif' : 'png';
+            const r   = await fetch(`https://cdn.discordapp.com/emojis/${tempEmoji.id}.${ext}`);
+            const buf = Buffer.from(await r.arrayBuffer());
+            await tempEmoji.delete('Role icon applied — removing temp emoji').catch(() => {});
+            return { icon: `data:image/${ext};base64,${buf.toString('base64')}`, unicodeEmoji: null };
+          } catch {
+            // Fallback: convert buffer directly (skips temp-emoji step)
+            const mime = session.iconMime ?? 'image/png';
+            return { icon: `data:${mime};base64,${session.iconBuffer.toString('base64')}`, unicodeEmoji: null };
+          }
+        }
+        // No buffer = previously saved discord-hosted icon — preserve existing role icon as-is
+        return {};
         return {};
       }
 
@@ -284,7 +308,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         existing.color          = session.color1;
         existing.colorSecondary = session.color2 ?? null;
         existing.iconType = session.iconType ?? 'none';
-        existing.icon     = session.iconValue ?? null; // data URI for images, emoji string for others
+        existing.icon     = session.iconType === 'image' ? 'discord_hosted' : (session.iconValue ?? null);
         await existing.save();
 
         await audit(client, guild.id, userId, 'ROLE_EDITED', { name: session.name, color: session.color1 });
@@ -309,7 +333,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
               color:          session.color1,
               colorSecondary: session.color2 ?? null,
               iconType:       session.iconType ?? 'none',
-              icon:           session.iconValue ?? null,
+              icon:           session.iconType === 'image' ? 'discord_hosted' : (session.iconValue ?? null),
               active:         true,
               softDeletedAt:  null,
             },
@@ -414,10 +438,10 @@ export async function handleRoleSetupMessage(message) {
         // Strip params ("image/png; charset=utf-8" → "image/png"), convert to data URI now
         // so we never pass a raw Buffer to Discord.js (it always encodes those as image/jpg)
         const ct   = (att.contentType ?? 'image/png').split(';')[0].trim();
-        const b64  = `data:${ct};base64,${buf.toString('base64')}`;
         session.iconType   = 'image';
-        session.iconValue  = b64;   // stored as data URI, not raw Buffer
-        session.iconBuffer = null;
+        session.iconValue  = null;
+        session.iconBuffer = buf;   // buffer kept in memory only, never stored in DB
+        session.iconMime   = ct;
         setSession(guild.id, author.id, session);
         const freshG = await guild.fetch().catch(() => guild);
         const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';

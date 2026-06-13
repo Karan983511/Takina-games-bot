@@ -19,6 +19,7 @@ const schema = new mongoose.Schema({
 
   rotation: {
     enabled:               { type: Boolean, default: false },
+    mode:                  { type: String, enum: ['sequential', 'random'], default: 'sequential' },
     frequency:             { type: String, enum: ['hourly', 'daily', 'weekly', 'monthly', 'custom'], default: 'daily' },
     customIntervalMinutes: { type: Number, default: 1440 },
   },

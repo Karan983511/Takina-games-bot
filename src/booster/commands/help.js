@@ -25,7 +25,7 @@ const PAGES = {
       { name: '`.booster template list`',         value: 'Browse available color templates' },
       { name: '`.booster template apply <name>`', value: 'Apply a template to your role' },
       { name: '`.booster backup`',                value: 'Save a backup of your role and VC' },
-      { name: '`.booster restore`',               value: 'Restore your role and VC from backup' },
+      { name: '`.booster restore`',               value: 'Restore your role/VC after grace period expires or a soft-delete' },
       { name: '`.booster vote`',                  value: 'Vote for a booster role to be featured' },
       { name: '`.booster vote status`',           value: 'See the current vote standings' },
       { name: '`.booster hof`',                   value: 'View the Hall of Fame' },

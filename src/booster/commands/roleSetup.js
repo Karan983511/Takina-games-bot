@@ -97,6 +97,7 @@ export async function execute(message) {
   let session = sessions.get(key);
   if (!session) {
     const isCustomEmoji = existing?.icon ? /^<a?:\w+:\d+>$/.test(existing.icon) : false;
+    const isDataURI     = existing?.icon ? existing.icon.startsWith('data:') : false;
     session = {
       name:      existing?.name           ?? null,
       color1:    existing?.color          ?? null,
@@ -104,7 +105,7 @@ export async function execute(message) {
       iconType:  null,
       iconValue: null,
       ...(existing?.icon
-        ? { iconType: isCustomEmoji ? 'custom' : 'emoji', iconValue: existing.icon }
+        ? { iconType: isCustomEmoji ? 'custom' : isDataURI ? 'image' : 'emoji', iconValue: existing.icon }
         : {}),
       awaitingInput: null,
       messageId:     null,

@@ -57,7 +57,7 @@ async function startGracePeriod(guild, userId, user, graceDays, client) {
       if (latestSettings.features?.gracePeriodDms ?? true) {
         await tryDm(user,
           `🗑️ Your grace period on **${guild.name}** has ended. Your custom role **${doc.name}** has been removed.\n` +
-          `Your settings are saved — if you boost again within 7 days, use \`.booster restore\` to get your role back.`
+          `Your settings are saved for **7 days** — if you boost again within that time, your role will be **automatically restored**.`
         );
       }
       const ch = latestSettings.logChannelId ? guild.channels.cache.get(latestSettings.logChannelId) : null;

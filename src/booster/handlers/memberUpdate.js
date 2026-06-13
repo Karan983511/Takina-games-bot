@@ -35,7 +35,7 @@ async function startGracePeriod(guild, userId, user, graceDays, client) {
       `💔 **You've stopped boosting ${guild.name}.**\n\n` +
       `Your custom role **${doc.name}** is still active and will be kept for **${graceDays} day${graceDays !== 1 ? 's' : ''}** ` +
       `(until **${deadlineStr}**). If you boost again before then, nothing will change.\n\n` +
-      `After ${deadlineStr}, your role will be automatically removed and your settings saved for 7 more days.`
+      `After ${deadlineStr}, your role will be automatically removed. If you boost again within 7 days after that, your role will be **automatically restored** — no commands needed.`
     );
   }
 

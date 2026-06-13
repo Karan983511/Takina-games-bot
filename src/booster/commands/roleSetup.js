@@ -495,14 +495,18 @@ export async function handleRoleSetupMessage(message) {
 
   // ── Icon ─────────────────────────────────────────────────────────────────────
   if (input === 'icon') {
-    // Image upload
+    // ── Image upload ────────────────────────────────────────────────────────────
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
-      await message.delete().catch(() => {});
 
-      const ext = (att.name ?? '').split('.').pop().toLowerCase();
-      if (!['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
-        await channel.send({ embeds: [errorEmbed('Unsupported file type. Please upload a PNG, JPG, WEBP, or GIF.')] })
+      // Validate file type BEFORE deleting message
+      const name = (att.name ?? '').toLowerCase();
+      const isImage = name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg')
+                   || name.endsWith('.gif') || name.endsWith('.webp')
+                   || (att.contentType ?? '').startsWith('image/');
+      if (!isImage) {
+        await message.delete().catch(() => {});
+        await channel.send({ embeds: [errorEmbed('Please upload an image file (PNG, JPG, GIF, or WEBP).')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session, guild);
@@ -510,27 +514,34 @@ export async function handleRoleSetupMessage(message) {
       }
 
       const processingMsg = await channel.send({
-        embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription('⏳ Processing your image...')],
+        embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription('⏳ Uploading your image as a temp emoji...')],
       });
 
       try {
-        const rawBuf    = await downloadImage(att.proxyURL ?? att.url);
-        const resizedBuf = await resizeToEmojiPng(rawBuf);
+        // Step 1 — Download BEFORE deleting the message.
+        // att.proxyURL (media.discordapp.net) returns 404 from external servers — use att.url (cdn).
+        // Both have signed expiry params that can become invalid after message deletion.
+        const imageBuffer = await downloadImage(att.url);
 
-        // Delete any previous temp emoji
+        // Step 2 — Message downloaded successfully; safe to delete now
+        await message.delete().catch(() => {});
+
+        // Step 3 — Delete stale temp emoji from a previous upload in this session
         if (session.iconTempEmojiId) {
           await guild.emojis.delete(session.iconTempEmojiId, 'Replaced by new upload').catch(() => {});
+          session.iconTempEmojiId = null;
         }
 
+        // Step 4 — Upload as a server emoji (Discord handles all resizing internally)
         const tempEmoji = await guild.emojis.create({
-          attachment: resizedBuf,
-          name: 'tmpricon',
-          reason: 'Temporary role icon — auto-removed after save',
+          attachment: imageBuffer,
+          name:       'tmpricon',
+          reason:     'Temp role icon — auto-deleted after save',
         });
 
+        // Step 5 — Store the emoji ID in session; resolveIconFields uses it at Save time
         session.iconType        = 'custom';
-        session.iconValue       = `<:tmpricon:${tempEmoji.id}>`;
-        session.iconUrl         = null;
+        session.iconValue       = null;          // not displayed; emojiId is the source of truth
         session.iconTempEmojiId = tempEmoji.id;
         setSession(guild.id, author.id, session, guild);
 
@@ -538,18 +549,21 @@ export async function handleRoleSetupMessage(message) {
         const freshG = await guild.fetch().catch(() => guild);
         const note   = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Will only apply once the server reaches boost level 2.';
         await channel.send({
-          embeds: [successEmbed(`✅ Image uploaded and resized to 128×128. Click **Save** to apply it.\nThe temp emoji is auto-removed 5 minutes after saving.${note}`)],
+          embeds: [successEmbed(`✅ Image uploaded. Click **Save** to apply it as your role icon.${note}`)],
         }).then(m => setTimeout(() => m.delete().catch(() => {}), 8000));
         await refreshSetupMessage(channel, session);
+
       } catch (err) {
+        await message.delete().catch(() => {});
         await processingMsg.delete().catch(() => {});
-        console.error('[roleSetup] Image upload error:', err);
+        console.error('[roleSetup] Emoji upload error:', err);
         await channel.send({
-          embeds: [errorEmbed('Failed to process your image. Make sure the bot has **Manage Emojis** permission and the server has free emoji slots.')],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 6000));
+          embeds: [errorEmbed(`❌ Image upload failed: ${(err?.message ?? String(err)).slice(0, 200)}`)],
+        }).then(m => setTimeout(() => m.delete().catch(() => {}), 10000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session, guild);
       }
+
       return true;
     }
 

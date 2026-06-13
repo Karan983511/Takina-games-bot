@@ -3,13 +3,11 @@ import BoosterSettings from '../models/BoosterSettings.js';
 import { log } from '../utils/logger.js';
 
 let _client = null;
-const _timers = new Map(); // guildId → NodeJS.Timeout
+const _timers = new Map();
 
 export function startRotationService(client) {
   _client = client;
   log('info', 'RotationService', '✅ Started');
-
-  // Guilds aren't cached until after login — wait for ready before scheduling.
   if (client.isReady()) {
     _scheduleAll();
   } else {
@@ -22,7 +20,6 @@ export function stopRotationService() {
   _timers.clear();
 }
 
-/** Called from /bsetup when rotation settings change for a specific guild. */
 export async function rescheduleGuild(guildId) {
   if (_timers.has(guildId)) { clearTimeout(_timers.get(guildId)); _timers.delete(guildId); }
   await _scheduleGuild(guildId);
@@ -42,7 +39,7 @@ async function _scheduleGuild(guildId) {
   const ms    = _freqToMs(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
   const timer = setTimeout(async () => {
     await runRotationForGuild(guildId);
-    _scheduleGuild(guildId); // reschedule
+    _scheduleGuild(guildId);
   }, ms);
 
   _timers.set(guildId, timer);
@@ -61,24 +58,24 @@ function _freqToMs(freq, customMinutes) {
 }
 
 /**
- * Cycles bot-tracked roles within the boundary one step downward:
+ * Runs one rotation cycle for a guild.
  *
- *   Before:              After:
- *   ─ Upper boundary ─   ─ Upper boundary ─
- *     Role 1               Role 2
- *     Role 2               Role 3
- *     Role 3               Role 1   ← was at top, now at bottom
- *   ─ Lower boundary ─   ─ Lower boundary ─
+ * Sequential mode (default):
+ *   ── Upper boundary ──      ── Upper boundary ──
+ *     Role 1  (top)    →        Role 2
+ *     Role 2           →        Role 3
+ *     Role 3  (bottom) →        Role 1  ← moved to bottom
+ *   ── Lower boundary ──      ── Lower boundary ──
  *
- * Only roles that belong to the bot (stored in BoosterRole) are moved.
- * Unrelated server roles are never touched.
+ * Random mode:
+ *   A random bot role inside the boundary is picked and moved to the top
+ *   (just below the upper boundary), giving it a fresh "featured" position.
  */
 export async function runRotationForGuild(guildId) {
   try {
     const guild = _client?.guilds?.cache?.get(guildId);
     if (!guild) return;
 
-    // Only bot-tracked roles.
     const botRoles = await BoosterRole.find({ guildId, active: true }).lean();
     if (!botRoles.length) return;
 
@@ -91,53 +88,71 @@ export async function runRotationForGuild(guildId) {
       : null;
 
     if (!upperRole || !lowerRole) {
-      log('warn', 'RotationService', `Guild ${guildId}: boundaries not configured, skipping rotation`);
+      log('warn', 'RotationService', `Guild ${guildId}: boundaries not configured, skipping`);
       return;
     }
 
-    // Use Math.min/max so it works regardless of which role the admin set as "upper"/"lower".
-    const minPos = Math.min(upperRole.position, lowerRole.position); // lower boundary position
-    const maxPos = Math.max(upperRole.position, lowerRole.position); // upper boundary position
+    const minPos = Math.min(upperRole.position, lowerRole.position);
+    const maxPos = Math.max(upperRole.position, lowerRole.position);
 
-    // Resolve Discord role objects for each tracked bot role, keep only those inside the boundary.
+    // Only bot-tracked roles strictly inside the boundary.
     const rolesInBounds = botRoles
       .map(doc => ({ doc, discordRole: guild.roles.cache.get(doc.roleId) }))
-      .filter(({ discordRole }) => (
+      .filter(({ discordRole }) =>
         discordRole &&
-        discordRole.position > minPos &&   // strictly inside — above lower boundary
-        discordRole.position < maxPos      // strictly inside — below upper boundary
-      ))
-      .sort((a, b) => b.discordRole.position - a.discordRole.position); // highest pos first = top of list
+        discordRole.position > minPos &&
+        discordRole.position < maxPos
+      )
+      .sort((a, b) => b.discordRole.position - a.discordRole.position); // highest pos first = top
 
     if (rolesInBounds.length < 2) {
-      log('info', 'RotationService', `Guild ${guildId}: fewer than 2 bot roles in bounds, nothing to rotate`);
+      log('info', 'RotationService', `Guild ${guildId}: fewer than 2 bot roles in bounds, skipping`);
       return;
     }
 
-    // The role at the TOP (highest position number = just below upper boundary).
-    const { discordRole: topRole, doc: topDoc } = rolesInBounds[0];
+    const mode = settings?.rotation?.mode ?? 'sequential';
+    let movedRole, targetPosition, logDescription;
 
-    // Move it to the BOTTOM: one step above the lower boundary.
-    const bottomTarget = minPos + 1;
+    if (mode === 'random') {
+      // Pick a random role (avoid picking the one already at top to prevent no-ops).
+      const candidates = rolesInBounds.length > 2
+        ? rolesInBounds.slice(1)   // exclude the current top
+        : rolesInBounds;           // only 2 roles — pick from both
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      movedRole      = pick.discordRole;
+      targetPosition = maxPos - 1; // move it to just below upper boundary (top of stack)
+      logDescription =
+        `**Mode:** 🎲 Random\n` +
+        `**Moved to top:** <@&${movedRole.id}>`;
+    } else {
+      // Sequential: top role → bottom.
+      movedRole      = rolesInBounds[0].discordRole;
+      targetPosition = minPos + 1; // move to just above lower boundary (bottom of stack)
+      const newOrder = [
+        ...rolesInBounds.slice(1).map(r => `<@&${r.discordRole.id}>`),
+        `<@&${movedRole.id}>`,
+      ].join('\n');
+      logDescription =
+        `**Mode:** 🔁 Sequential\n` +
+        `**Moved to bottom:** <@&${movedRole.id}>\n\n` +
+        `**New order (top → bottom):**\n${newOrder}`;
+    }
 
-    await topRole.setPosition(bottomTarget);
+    await movedRole.setPosition(targetPosition).catch((err) => {
+      log('error', 'RotationService', `setPosition failed for ${movedRole.id}: ${err.message}`);
+    });
 
-    log('info', 'RotationService', `Rotated "${topDoc.name}" (${topRole.id}) to bottom in guild ${guildId}`);
+    log('info', 'RotationService', `[${mode}] Rotated "${movedRole.name}" in guild ${guildId}`);
 
-    // Post to log channel if configured.
     if (settings?.logChannelId) {
       const ch = guild.channels.cache.get(settings.logChannelId);
       if (ch) {
         const { EmbedBuilder } = await import('discord.js');
-        const remaining = rolesInBounds.slice(1).map(r => `<@&${r.discordRole.id}>`).join('\n');
         ch.send({
           embeds: [new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('🔄 Role Rotation')
-            .setDescription(
-              `**Moved to bottom:** <@&${topRole.id}>\n\n` +
-              `**New order (top → bottom):**\n${remaining}\n<@&${topRole.id}>`
-            )
+            .setDescription(logDescription)
             .setTimestamp()],
         }).catch(() => {});
       }

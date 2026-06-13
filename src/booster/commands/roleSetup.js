@@ -14,7 +14,6 @@ import {
   ButtonBuilder,
   ButtonStyle,
   MessageFlags,
-  AttachmentBuilder,
 } from 'discord.js';
 import BoosterRole from '../models/BoosterRole.js';
 import { getInsertPosition, assertBoundary } from '../utils/boundary.js';
@@ -22,7 +21,6 @@ import { normalizeHex } from '../utils/validators.js';
 import { errorEmbed, successEmbed } from '../utils/embeds.js';
 import { audit } from '../utils/logger.js';
 import { get as httpsGet } from 'https';
-import { createCanvas, loadImage } from 'canvas';
 
 // ─── Session timeout ──────────────────────────────────────────────────────────
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -49,33 +47,13 @@ function downloadImage(url) {
   });
 }
 
-// ─── Resize any image to 128×128 PNG using canvas ────────────────────────────
-async function resizeToEmojiPng(inputBuffer) {
-  const img    = await loadImage(inputBuffer);
-  const canvas = createCanvas(128, 128);
-  const ctx    = canvas.getContext('2d');
-  ctx.clearRect(0, 0, 128, 128);
-  ctx.drawImage(img, 0, 0, 128, 128);
-  return canvas.toBuffer('image/png');
-}
+// ─── No server-side resize — Discord handles it internally ───────────────────
+// eslint-disable-next-line no-unused-vars
+async function resizeToEmojiPng(inputBuffer) { return inputBuffer; }
 
-// ─── Generate color swatch PNG (280×40) for preview ──────────────────────────
-function buildColorSwatchBuffer(hex1, hex2 = null) {
-  const canvas = createCanvas(280, 40);
-  const ctx    = canvas.getContext('2d');
-  if (hex2) {
-    const grad = ctx.createLinearGradient(0, 0, 280, 0);
-    grad.addColorStop(0, hex1);
-    grad.addColorStop(1, hex2);
-    ctx.fillStyle = grad;
-  } else {
-    ctx.fillStyle = hex1;
-  }
-  ctx.beginPath();
-  ctx.roundRect(0, 0, 280, 40, 8);
-  ctx.fill();
-  return canvas.toBuffer('image/png');
-}
+// ─── Color swatch: no canvas available — always use text fallback ─────────────
+// eslint-disable-next-line no-unused-vars
+function buildColorSwatchBuffer() { throw new Error('canvas not available'); }
 
 function sessionKey(guildId, userId) { return `${guildId}:${userId}`; }
 
@@ -328,10 +306,10 @@ export async function handleRoleSetupInteraction(interaction, client) {
       const canUseIcons = freshGuild.premiumTier >= 2;
 
       async function resolveIconFields() {
+        // Use downloadImage (Node https module) — more reliable than native fetch for Discord CDN
         if (session.iconTempEmojiId) {
           try {
-            const r   = await fetch(`https://cdn.discordapp.com/emojis/${session.iconTempEmojiId}.png`);
-            const buf = Buffer.from(await r.arrayBuffer());
+            const buf = await downloadImage(`https://cdn.discordapp.com/emojis/${session.iconTempEmojiId}.png`);
             return { icon: `data:image/png;base64,${buf.toString('base64')}`, unicodeEmoji: null };
           } catch { return {}; }
         }
@@ -340,8 +318,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
           if (match) {
             const ext = session.iconValue.startsWith('<a:') ? 'gif' : 'png';
             try {
-              const r   = await fetch(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
-              const buf = Buffer.from(await r.arrayBuffer());
+              const buf = await downloadImage(`https://cdn.discordapp.com/emojis/${match[1]}.${ext}`);
               return { icon: `data:image/${ext};base64,${buf.toString('base64')}`, unicodeEmoji: null };
             } catch { return {}; }
           }
@@ -497,22 +474,23 @@ export async function handleRoleSetupMessage(message) {
       });
 
       try {
+        // Step 1: download the image via Node https (reliable, no native fetch quirks)
         const rawBuf = await downloadImage(att.proxyURL ?? att.url);
-        // resizeToEmojiPng uses native canvas — fall back to raw buffer if it fails
-        let resizedBuf = rawBuf;
-        try { resizedBuf = await resizeToEmojiPng(rawBuf); } catch { /* use rawBuf as-is */ }
 
-        // Delete any previous temp emoji
+        // Step 2: delete any stale temp emoji from a previous upload attempt
         if (session.iconTempEmojiId) {
           await guild.emojis.delete(session.iconTempEmojiId, 'Replaced by new upload').catch(() => {});
+          session.iconTempEmojiId = null;
         }
 
+        // Step 3: upload as a server emoji (Discord resizes automatically)
         const tempEmoji = await guild.emojis.create({
-          attachment: resizedBuf,
+          attachment: rawBuf,
           name: 'tmpricon',
           reason: 'Temporary role icon — auto-removed after save',
         });
 
+        // Step 4: store emoji ID in session — resolveIconFields uses it at save time
         session.iconType        = 'custom';
         session.iconValue       = `<:tmpricon:${tempEmoji.id}>`;
         session.iconUrl         = null;
@@ -523,16 +501,17 @@ export async function handleRoleSetupMessage(message) {
         const freshG = await guild.fetch().catch(() => guild);
         const note   = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Will only apply once the server reaches boost level 2.';
         await channel.send({
-          embeds: [successEmbed(`✅ Image uploaded and resized to 128×128. Click **Save** to apply it.\nThe temp emoji is auto-removed 5 minutes after saving.${note}`)],
+          embeds: [successEmbed(`✅ Image ready. Click **Save** to apply it as your role icon.\n*(Temp emoji auto-removed 5 min after saving.)*${note}`)],
         }).then(m => setTimeout(() => m.delete().catch(() => {}), 8000));
         await refreshSetupMessage(channel, session);
       } catch (err) {
         await processingMsg.delete().catch(() => {});
         console.error('[roleSetup] Image upload error:', err);
-        const errMsg = err?.message ?? String(err);
+        // Show actual error so it's diagnosable without Railway logs
+        const errDetail = err?.message ? `: ${err.message.slice(0, 150)}` : '';
         await channel.send({
-          embeds: [errorEmbed(`❌ Image error: ${errMsg.slice(0, 200)}`)],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 15000));
+          embeds: [errorEmbed(`❌ Failed to upload image${errDetail}`)],
+        }).then(m => setTimeout(() => m.delete().catch(() => {}), 10000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session, guild);
       }

@@ -11,7 +11,7 @@ export function startRotationService(client) {
   if (client.isReady()) {
     _scheduleAll();
   } else {
-    client.once('ready', () => _scheduleAll());
+    client.once('clientReady', () => _scheduleAll());
   }
 }
 

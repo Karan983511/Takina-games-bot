@@ -1,6 +1,7 @@
 import { Events, ActivityType } from 'discord.js';
 import { registerCommands } from '../handlers/commandLoader.js';
 import { runStartupEmojiSweep } from '../booster/services/emojiCleanupService.js';
+import { runGraceExpirySweep } from '../booster/services/cleanupService.js';
 
 export default {
   name: Events.ClientReady,
@@ -23,15 +24,22 @@ export default {
       console.error('[Takina Games] Emoji sweep error:', err.message);
     }
 
+    // Recover grace period timers lost across bot restarts
+    try {
+      await runGraceExpirySweep(client);
+    } catch (err) {
+      console.error('[Takina Games] Grace sweep error:', err.message);
+    }
+
     // Set bot presence
     client.user.setPresence({
-      activities: [{ name: '🎮 /setup to configure games', type: ActivityType.Playing }],
+      activities: [{ name: '\ud83c\udfae /setup to configure games', type: ActivityType.Playing }],
       status: 'online',
     });
 
     // Start game schedulers for every guild
     client.scheduler.startAll();
 
-    console.log(`[Takina Games] ✅ Ready!`);
+    console.log(`[Takina Games] \u2705 Ready!`);
   },
 };

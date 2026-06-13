@@ -497,8 +497,10 @@ export async function handleRoleSetupMessage(message) {
       });
 
       try {
-        const rawBuf    = await downloadImage(att.proxyURL ?? att.url);
-        const resizedBuf = await resizeToEmojiPng(rawBuf);
+        const rawBuf = await downloadImage(att.proxyURL ?? att.url);
+        // resizeToEmojiPng uses native canvas — fall back to raw buffer if it fails
+        let resizedBuf = rawBuf;
+        try { resizedBuf = await resizeToEmojiPng(rawBuf); } catch { /* use rawBuf as-is */ }
 
         // Delete any previous temp emoji
         if (session.iconTempEmojiId) {

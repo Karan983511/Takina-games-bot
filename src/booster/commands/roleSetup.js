@@ -18,9 +18,31 @@ import { getInsertPosition, assertBoundary } from '../utils/boundary.js';
 import { normalizeHex } from '../utils/validators.js';
 import { errorEmbed, successEmbed } from '../utils/embeds.js';
 import { audit } from '../utils/logger.js';
+import { get as httpsGet } from 'https';
 
 // ─── In-memory session store (per user per guild) ─────────────────────────────
 const sessions = new Map();
+
+// ─── Reliable image downloader using Node https module ────────────────────────
+function downloadImage(url) {
+  return new Promise((resolve, reject) => {
+    function doGet(target) {
+      httpsGet(target, { headers: { 'User-Agent': 'TakinaGamesBot/1.0' } }, (res) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          doGet(res.headers.location);
+          return;
+        }
+        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      }).on('error', reject)
+        .setTimeout(12000, function() { this.destroy(); reject(new Error('timeout')); });
+    }
+    doGet(url);
+  });
+}
 
 function sessionKey(guildId, userId) { return `${guildId}:${userId}`; }
 
@@ -394,9 +416,6 @@ export async function handleRoleSetupMessage(message) {
   }
 
   if (input === 'icon') {
-    // NOTE: do NOT delete the message yet for attachments — Discord invalidates
-    // the CDN URL as soon as the message is deleted, causing fetch() to 404.
-
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
       const allowed = ['image/png', 'image/jpeg', 'image/webp'];
@@ -415,17 +434,24 @@ export async function handleRoleSetupMessage(message) {
         setSession(guild.id, author.id, session);
         return true;
       }
-      // Store the proxyURL — no manual fetch needed.
-      // Discord.js resolves the URL internally (via undici) when the role is saved.
-      session.iconType  = 'image';
-      session.iconValue = null;
-      session.iconUrl   = att.proxyURL;
-      setSession(guild.id, author.id, session);
-      const freshG = await guild.fetch().catch(() => guild);
-      const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
-      await channel.send({ embeds: [successEmbed(`✅ Image icon saved. It will be applied when you click **Save**.${note}`)] })
-        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-      await refreshSetupMessage(channel, session);
+      try {
+        const buf  = await downloadImage(att.proxyURL ?? att.url);
+        const mime = (att.contentType ?? 'image/png').split(';')[0].trim();
+        session.iconType  = 'image';
+        session.iconValue = null;
+        session.iconUrl   = `data:${mime};base64,${buf.toString('base64')}`;
+        setSession(guild.id, author.id, session);
+        const freshG = await guild.fetch().catch(() => guild);
+        const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
+        await channel.send({ embeds: [successEmbed(`✅ Image icon saved. It will be applied when you click **Save**.${note}`)] })
+          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+        await refreshSetupMessage(channel, session);
+      } catch (err) {
+        await channel.send({ embeds: [errorEmbed('Failed to download your image. Please try again.')] })
+          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+        session.awaitingInput = 'icon';
+        setSession(guild.id, author.id, session);
+      }
       return true;
     }
 

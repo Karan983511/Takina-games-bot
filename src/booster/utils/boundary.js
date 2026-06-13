@@ -11,10 +11,37 @@ export async function isInBoundary(guild, role) {
   return role.position >= min && role.position <= max;
 }
 
+/**
+ * Returns the position for a newly created bot role — just above the lower
+ * boundary (bottom of the stack), so new roles enter at the bottom:
+ *
+ *   ── Upper boundary ──
+ *     Role A  (oldest / been rotated up)
+ *     Role B
+ *     Role C
+ *     New Role  ← inserted here, just above lower boundary
+ *   ── Lower boundary ──
+ *
+ * Falls back to just below the upper boundary if only the upper boundary
+ * is configured (no lower boundary set).
+ */
 export async function getInsertPosition(guild) {
   const settings = await BoosterSettings.findOne({ guildId: guild.id }).lean();
-  if (!settings?.boundaries?.upperRoleId) return 1;
-  const upper = guild.roles.cache.get(settings.boundaries.upperRoleId);
+
+  const lower = settings?.boundaries?.lowerRoleId
+    ? guild.roles.cache.get(settings.boundaries.lowerRoleId)
+    : null;
+
+  if (lower) {
+    // Place just above the lower boundary (bottom of the boundary stack).
+    return lower.position + 1;
+  }
+
+  // Fallback: no lower boundary configured — place just below the upper boundary.
+  const upper = settings?.boundaries?.upperRoleId
+    ? guild.roles.cache.get(settings.boundaries.upperRoleId)
+    : null;
+
   return upper ? upper.position - 1 : 1;
 }
 

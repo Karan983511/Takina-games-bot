@@ -1,6 +1,5 @@
 import BoosterRole from '../models/BoosterRole.js';
 import BoosterSettings from '../models/BoosterSettings.js';
-import { getInsertPosition } from '../utils/boundary.js';
 import { log } from '../utils/logger.js';
 
 let _client = null;
@@ -10,7 +9,7 @@ export function startRotationService(client) {
   _client = client;
   log('info', 'RotationService', '✅ Started');
 
-  // FIX: guilds aren't cached until after login — wait for ready before scheduling.
+  // Guilds aren't cached until after login — wait for ready before scheduling.
   if (client.isReady()) {
     _scheduleAll();
   } else {
@@ -61,61 +60,88 @@ function _freqToMs(freq, customMinutes) {
   }
 }
 
+/**
+ * Cycles bot-tracked roles within the boundary one step downward:
+ *
+ *   Before:              After:
+ *   ─ Upper boundary ─   ─ Upper boundary ─
+ *     Role 1               Role 2
+ *     Role 2               Role 3
+ *     Role 3               Role 1   ← was at top, now at bottom
+ *   ─ Lower boundary ─   ─ Lower boundary ─
+ *
+ * Only roles that belong to the bot (stored in BoosterRole) are moved.
+ * Unrelated server roles are never touched.
+ */
 export async function runRotationForGuild(guildId) {
   try {
     const guild = _client?.guilds?.cache?.get(guildId);
     if (!guild) return;
 
-    // Only roles the bot created and tracks — never touches unrelated server roles.
+    // Only bot-tracked roles.
     const botRoles = await BoosterRole.find({ guildId, active: true }).lean();
     if (!botRoles.length) return;
 
     const settings  = await BoosterSettings.findOne({ guildId }).lean();
-    const upperRole = settings?.boundaries?.upperRoleId ? guild.roles.cache.get(settings.boundaries.upperRoleId) : null;
-    const lowerRole = settings?.boundaries?.lowerRoleId ? guild.roles.cache.get(settings.boundaries.lowerRoleId) : null;
+    const upperRole = settings?.boundaries?.upperRoleId
+      ? guild.roles.cache.get(settings.boundaries.upperRoleId)
+      : null;
+    const lowerRole = settings?.boundaries?.lowerRoleId
+      ? guild.roles.cache.get(settings.boundaries.lowerRoleId)
+      : null;
 
-    if (!upperRole || !lowerRole) return;
-
-    // FIX: use Math.min/max so boundary order in config doesn't matter,
-    // and >= / <= (inclusive) — consistent with boundary.js isInBoundary().
-    const minPos = Math.min(upperRole.position, lowerRole.position);
-    const maxPos = Math.max(upperRole.position, lowerRole.position);
-
-    let repositioned = 0;
-
-    for (const doc of botRoles) {
-      const dr = guild.roles.cache.get(doc.roleId);
-      if (!dr) continue;
-
-      const inBounds = dr.position >= minPos && dr.position <= maxPos;
-      if (inBounds) continue;
-
-      // FIX: re-read target each iteration so position shifts from previous
-      // moves don't cause this role to land at the wrong spot.
-      // getInsertPosition queries the DB and reads upperRole.position fresh.
-      const target = await getInsertPosition(guild);
-      await dr.setPosition(target).catch((err) => {
-        log('error', 'RotationService', `setPosition failed for role ${doc.roleId}: ${err.message}`);
-      });
-      repositioned++;
-      log('info', 'RotationService', `Repositioned bot role ${doc.roleId} (${doc.userId}) back into bounds`);
+    if (!upperRole || !lowerRole) {
+      log('warn', 'RotationService', `Guild ${guildId}: boundaries not configured, skipping rotation`);
+      return;
     }
 
-    if (repositioned > 0 && settings?.logChannelId) {
+    // Use Math.min/max so it works regardless of which role the admin set as "upper"/"lower".
+    const minPos = Math.min(upperRole.position, lowerRole.position); // lower boundary position
+    const maxPos = Math.max(upperRole.position, lowerRole.position); // upper boundary position
+
+    // Resolve Discord role objects for each tracked bot role, keep only those inside the boundary.
+    const rolesInBounds = botRoles
+      .map(doc => ({ doc, discordRole: guild.roles.cache.get(doc.roleId) }))
+      .filter(({ discordRole }) => (
+        discordRole &&
+        discordRole.position > minPos &&   // strictly inside — above lower boundary
+        discordRole.position < maxPos      // strictly inside — below upper boundary
+      ))
+      .sort((a, b) => b.discordRole.position - a.discordRole.position); // highest pos first = top of list
+
+    if (rolesInBounds.length < 2) {
+      log('info', 'RotationService', `Guild ${guildId}: fewer than 2 bot roles in bounds, nothing to rotate`);
+      return;
+    }
+
+    // The role at the TOP (highest position number = just below upper boundary).
+    const { discordRole: topRole, doc: topDoc } = rolesInBounds[0];
+
+    // Move it to the BOTTOM: one step above the lower boundary.
+    const bottomTarget = minPos + 1;
+
+    await topRole.setPosition(bottomTarget);
+
+    log('info', 'RotationService', `Rotated "${topDoc.name}" (${topRole.id}) to bottom in guild ${guildId}`);
+
+    // Post to log channel if configured.
+    if (settings?.logChannelId) {
       const ch = guild.channels.cache.get(settings.logChannelId);
       if (ch) {
         const { EmbedBuilder } = await import('discord.js');
+        const remaining = rolesInBounds.slice(1).map(r => `<@&${r.discordRole.id}>`).join('\n');
         ch.send({
           embeds: [new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle('🔄 Boundary Rotation')
-            .setDescription(`Repositioned **${repositioned}** bot role(s) back within boundaries.`)
+            .setTitle('🔄 Role Rotation')
+            .setDescription(
+              `**Moved to bottom:** <@&${topRole.id}>\n\n` +
+              `**New order (top → bottom):**\n${remaining}\n<@&${topRole.id}>`
+            )
             .setTimestamp()],
         }).catch(() => {});
       }
     }
-
-    log('info', 'RotationService', `Rotation complete for ${guildId}: ${repositioned} repositioned`);
   } catch (err) {
     log('error', 'RotationService', `Error for guild ${guildId}: ${err.message}`);
   }

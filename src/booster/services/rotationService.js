@@ -57,6 +57,17 @@ function _freqToMs(freq, customMinutes) {
   }
 }
 
+function freqLabel(freq, customMinutes) {
+  switch (freq) {
+    case 'hourly':  return 'Every hour';
+    case 'daily':   return 'Every day';
+    case 'weekly':  return 'Every week';
+    case 'monthly': return 'Every month';
+    case 'custom':  return `Every ${customMinutes ?? 1440} minutes`;
+    default:        return 'Daily';
+  }
+}
+
 /**
  * Runs one rotation cycle for a guild.
  *
@@ -69,7 +80,7 @@ function _freqToMs(freq, customMinutes) {
  *
  * Random mode:
  *   A random bot role inside the boundary is picked and moved to the top
- *   (just below the upper boundary), giving it a fresh "featured" position.
+ *   (just below the upper boundary).
  */
 export async function runRotationForGuild(guildId) {
   try {
@@ -111,50 +122,76 @@ export async function runRotationForGuild(guildId) {
     }
 
     const mode = settings?.rotation?.mode ?? 'sequential';
-    let movedRole, targetPosition, logDescription;
+    let movedEntry, targetPosition;
 
     if (mode === 'random') {
-      // Pick a random role (avoid picking the one already at top to prevent no-ops).
       const candidates = rolesInBounds.length > 2
-        ? rolesInBounds.slice(1)   // exclude the current top
-        : rolesInBounds;           // only 2 roles — pick from both
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
-      movedRole      = pick.discordRole;
-      targetPosition = maxPos - 1; // move it to just below upper boundary (top of stack)
-      logDescription =
-        `**Mode:** 🎲 Random\n` +
-        `**Moved to top:** <@&${movedRole.id}>`;
+        ? rolesInBounds.slice(1)   // exclude current top to avoid no-op
+        : rolesInBounds;
+      movedEntry     = candidates[Math.floor(Math.random() * candidates.length)];
+      targetPosition = maxPos - 1; // top of stack (just below upper boundary)
     } else {
-      // Sequential: top role → bottom.
-      movedRole      = rolesInBounds[0].discordRole;
-      targetPosition = minPos + 1; // move to just above lower boundary (bottom of stack)
-      const newOrder = [
-        ...rolesInBounds.slice(1).map(r => `<@&${r.discordRole.id}>`),
-        `<@&${movedRole.id}>`,
-      ].join('\n');
-      logDescription =
-        `**Mode:** 🔁 Sequential\n` +
-        `**Moved to bottom:** <@&${movedRole.id}>\n\n` +
-        `**New order (top → bottom):**\n${newOrder}`;
+      movedEntry     = rolesInBounds[0]; // current top role
+      targetPosition = minPos + 1;       // bottom of stack (just above lower boundary)
     }
 
-    await movedRole.setPosition(targetPosition).catch((err) => {
-      log('error', 'RotationService', `setPosition failed for ${movedRole.id}: ${err.message}`);
+    await movedEntry.discordRole.setPosition(targetPosition).catch((err) => {
+      log('error', 'RotationService', `setPosition failed for ${movedEntry.discordRole.id}: ${err.message}`);
     });
 
-    log('info', 'RotationService', `[${mode}] Rotated "${movedRole.name}" in guild ${guildId}`);
+    log('info', 'RotationService', `[${mode}] Rotated "${movedEntry.doc.name}" in guild ${guildId}`);
 
+    // ── Send log message ────────────────────────────────────────────────────
     if (settings?.logChannelId) {
       const ch = guild.channels.cache.get(settings.logChannelId);
       if (ch) {
         const { EmbedBuilder } = await import('discord.js');
-        ch.send({
-          embeds: [new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle('🔄 Role Rotation')
-            .setDescription(logDescription)
-            .setTimestamp()],
-        }).catch(() => {});
+
+        // Build the new order list after the move (re-sort after position change).
+        const updatedOrder = rolesInBounds.map(({ doc, discordRole }) => {
+          const isMoved = discordRole.id === movedEntry.discordRole.id;
+          const pos = isMoved ? targetPosition : discordRole.position;
+          return { doc, discordRole, pos };
+        }).sort((a, b) => b.pos - a.pos);
+
+        const orderLines = updatedOrder.map(({ doc, discordRole }, i) => {
+          const isMoved  = discordRole.id === movedEntry.discordRole.id;
+          const arrow    = isMoved ? (mode === 'random' ? ' ← moved to top' : ' ← moved to bottom') : '';
+          return `${i + 1}. <@&${discordRole.id}> — <@${doc.userId}>${arrow}`;
+        });
+
+        const nextMs   = _freqToMs(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
+        const nextTime = Math.floor((Date.now() + nextMs) / 1000);
+
+        const embed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🔄 Rotation Complete')
+          .addFields(
+            {
+              name: 'Mode',
+              value: mode === 'random' ? '🎲 Random' : '🔁 Sequential',
+              inline: true,
+            },
+            {
+              name: mode === 'random' ? 'Moved to Top' : 'Moved to Bottom',
+              value: `<@&${movedEntry.discordRole.id}> — <@${movedEntry.doc.userId}>`,
+              inline: true,
+            },
+            {
+              name: 'Next Rotation',
+              value: `<t:${nextTime}:R> (<t:${nextTime}:f>)`,
+              inline: true,
+            },
+            {
+              name: `New Order (${rolesInBounds.length} roles)`,
+              value: orderLines.join('\n'),
+              inline: false,
+            },
+          )
+          .setFooter({ text: `Frequency: ${freqLabel(settings.rotation.frequency, settings.rotation.customIntervalMinutes)}` })
+          .setTimestamp();
+
+        ch.send({ embeds: [embed] }).catch(() => {});
       }
     }
   } catch (err) {

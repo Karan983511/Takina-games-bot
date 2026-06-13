@@ -129,7 +129,7 @@ export async function handleBoosterInteraction(interaction, client) {
     if (color2Raw && !colorSecondary) return interaction.editReply({ embeds: [errorEmbed('Secondary color is invalid. Use a hex code like `#6B35FF`.')] });
     try {
       const { discordRole } = await createBoosterRole(interaction.guild, interaction.user.id, { name, color, colorSecondary });
-      await audit(client, interaction.guild.id, interaction.user.id, 'ROLE_CREATED', { name, color, colorSecondary, roleId: discordRole.id });
+      await audit(client, interaction.guild.id, interaction.user.id, 'ROLE_CREATED', { name, color: colorSecondary ? `${color} → ${colorSecondary}` : color, roleId: discordRole.id });
       const note = colorSecondary ? (interaction.guild.features?.includes('ENHANCED_ROLE_COLORS') ? '' : '\n\n> ⚠️ Your server does not support Enhanced Role Colors yet, so only the primary color was applied.') : '';
       return interaction.editReply({ embeds: [successEmbed(`Your custom role ${discordRole} has been created!${note}`)] });
     } catch (err) { return interaction.editReply({ embeds: [errorEmbed(`Failed: ${err.message}`)] }); }

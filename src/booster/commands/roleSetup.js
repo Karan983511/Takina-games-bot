@@ -375,7 +375,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         existing.icon = tempEmojiId ? 'discord_hosted' : (session.iconType === 'image' ? 'discord_hosted' : (session.iconValue ?? null));
         await existing.save();
         if (tempEmojiId) scheduleEmojiDelete(guild, tempEmojiId, 5 * 60 * 1000);
-        await audit(client, guild.id, userId, 'ROLE_EDITED', { name: session.name, color: session.color1 });
+        await audit(client, guild.id, userId, 'ROLE_EDITED', { name: session.name, color: session.color2 ? `${session.color1} → ${session.color2}` : session.color1 });
         clearSession(guild.id, userId);
         const note = iconSkipped ? '\n\n> 🔒 Icon saved but not applied — your server needs boost level 2 for role icons.' : '';
         const gradientNote = session.color2 && !supportsEnhancedRoleColors(guild)
@@ -404,7 +404,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
         const member = guild.members.cache.get(userId) ?? await guild.members.fetch(userId).catch(() => null);
         if (member) await member.roles.add(discordRole).catch(() => {});
         if (tempEmojiId) scheduleEmojiDelete(guild, tempEmojiId, 5 * 60 * 1000);
-        await audit(client, guild.id, userId, 'ROLE_CREATED', { name: session.name, color: session.color1, roleId: discordRole.id });
+        await audit(client, guild.id, userId, 'ROLE_CREATED', { name: session.name, color: session.color2 ? `${session.color1} → ${session.color2}` : session.color1, roleId: discordRole.id });
         clearSession(guild.id, userId);
         const note = iconSkipped ? '\n\n> 🔒 Icon saved but not applied — your server needs boost level 2 for role icons.' : '';
         const gradientNote = session.color2 && !supportsEnhancedRoleColors(guild)

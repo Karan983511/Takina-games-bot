@@ -10,8 +10,7 @@ export function startRotationService(client) {
   _client = client;
   log('info', 'RotationService', '✅ Started');
 
-  // BUG FIX 1: guilds aren't cached until after login.
-  // Wait for the ready event before scheduling — otherwise guilds.cache is empty.
+  // FIX: guilds aren't cached until after login — wait for ready before scheduling.
   if (client.isReady()) {
     _scheduleAll();
   } else {
@@ -67,8 +66,9 @@ export async function runRotationForGuild(guildId) {
     const guild = _client?.guilds?.cache?.get(guildId);
     if (!guild) return;
 
-    const roles = await BoosterRole.find({ guildId, active: true }).lean();
-    if (!roles.length) return;
+    // Only roles the bot created and tracks — never touches unrelated server roles.
+    const botRoles = await BoosterRole.find({ guildId, active: true }).lean();
+    if (!botRoles.length) return;
 
     const settings  = await BoosterSettings.findOne({ guildId }).lean();
     const upperRole = settings?.boundaries?.upperRoleId ? guild.roles.cache.get(settings.boundaries.upperRoleId) : null;
@@ -76,47 +76,46 @@ export async function runRotationForGuild(guildId) {
 
     if (!upperRole || !lowerRole) return;
 
-    // BUG FIX 2: use Math.min/max so boundary order doesn't matter,
-    // and use >= / <= (inclusive) consistent with boundary.js isInBoundary().
+    // FIX: use Math.min/max so boundary order in config doesn't matter,
+    // and >= / <= (inclusive) — consistent with boundary.js isInBoundary().
     const minPos = Math.min(upperRole.position, lowerRole.position);
     const maxPos = Math.max(upperRole.position, lowerRole.position);
-    const target  = await getInsertPosition(guild);
 
-    // BUG FIX 3: collect all out-of-bounds roles first, then move them in one
-    // bulk setPositions() call so Discord position numbers don't shift mid-loop.
-    const toReposition = [];
-    for (const doc of roles) {
+    let repositioned = 0;
+
+    for (const doc of botRoles) {
       const dr = guild.roles.cache.get(doc.roleId);
       if (!dr) continue;
+
       const inBounds = dr.position >= minPos && dr.position <= maxPos;
-      if (!inBounds) {
-        toReposition.push(doc.roleId);
-        log('info', 'RotationService', `Role ${doc.roleId} (${doc.userId}) is out of bounds — queued for reposition`);
-      }
-    }
+      if (inBounds) continue;
 
-    if (toReposition.length > 0) {
-      const moves = toReposition.map(roleId => ({ role: roleId, position: target }));
-      await guild.roles.setPositions(moves).catch((err) => {
-        log('error', 'RotationService', `setPositions failed for guild ${guildId}: ${err.message}`);
+      // FIX: re-read target each iteration so position shifts from previous
+      // moves don't cause this role to land at the wrong spot.
+      // getInsertPosition queries the DB and reads upperRole.position fresh.
+      const target = await getInsertPosition(guild);
+      await dr.setPosition(target).catch((err) => {
+        log('error', 'RotationService', `setPosition failed for role ${doc.roleId}: ${err.message}`);
       });
+      repositioned++;
+      log('info', 'RotationService', `Repositioned bot role ${doc.roleId} (${doc.userId}) back into bounds`);
+    }
 
-      if (settings?.logChannelId) {
-        const ch = guild.channels.cache.get(settings.logChannelId);
-        if (ch) {
-          const { EmbedBuilder } = await import('discord.js');
-          ch.send({
-            embeds: [new EmbedBuilder()
-              .setColor(0x5865F2)
-              .setTitle('🔄 Boundary Rotation')
-              .setDescription(`Repositioned **${toReposition.length}** role(s) back within boundaries.`)
-              .setTimestamp()],
-          }).catch(() => {});
-        }
+    if (repositioned > 0 && settings?.logChannelId) {
+      const ch = guild.channels.cache.get(settings.logChannelId);
+      if (ch) {
+        const { EmbedBuilder } = await import('discord.js');
+        ch.send({
+          embeds: [new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('🔄 Boundary Rotation')
+            .setDescription(`Repositioned **${repositioned}** bot role(s) back within boundaries.`)
+            .setTimestamp()],
+        }).catch(() => {});
       }
     }
 
-    log('info', 'RotationService', `Rotation complete for ${guildId}: ${toReposition.length} repositioned`);
+    log('info', 'RotationService', `Rotation complete for ${guildId}: ${repositioned} repositioned`);
   } catch (err) {
     log('error', 'RotationService', `Error for guild ${guildId}: ${err.message}`);
   }

@@ -427,22 +427,17 @@ export async function handleRoleSetupMessage(message) {
   if (input === 'icon') {
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
-      const allowed = ['image/png', 'image/jpeg', 'image/webp'];
+      // Discord emoji API supports PNG, JPG, GIF — not WEBP
+      const allowed = ['image/png', 'image/jpeg', 'image/gif'];
       await message.delete().catch(() => {});
       if (!allowed.some(t => (att.contentType ?? '').startsWith(t))) {
-        await channel.send({ embeds: [errorEmbed('Invalid file type. Only PNG, JPG, or WEBP images are supported.')] })
+        await channel.send({ embeds: [errorEmbed('Invalid file type. Please use PNG, JPG, or GIF. (WEBP is not supported for role icons.)')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session);
         return true;
       }
-      if (att.size > 256 * 1024) {
-        await channel.send({ embeds: [errorEmbed('Image too large. Role icons must be under 256 KB.')] })
-          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-        session.awaitingInput = 'icon';
-        setSession(guild.id, author.id, session);
-        return true;
-      }
+      // No size check here — Discord's emoji API will reject if too large (256 KB limit)
       try {
         // Download image then upload as a temp server emoji.
         // Using the emoji CDN URL at save time avoids Discord API image data issues.

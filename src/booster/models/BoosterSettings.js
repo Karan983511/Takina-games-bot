@@ -36,6 +36,5 @@ const schema = new mongoose.Schema({
   logChannelId: { type: String, default: null },
 }, { timestamps: true });
 
-schema.index({ guildId: 1 });
 
 export default mongoose.model('BoosterSettings', schema);

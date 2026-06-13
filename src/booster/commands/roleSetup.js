@@ -499,14 +499,14 @@ export async function handleRoleSetupMessage(message) {
     // ── Image upload ────────────────────────────────────────────────────────────
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
-      await message.delete().catch(() => {});
 
-      // Accept any image file (let Discord's emoji API be the gatekeeper on size/format)
+      // Validate file type BEFORE deleting message
       const name = (att.name ?? '').toLowerCase();
       const isImage = name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg')
                    || name.endsWith('.gif') || name.endsWith('.webp')
                    || (att.contentType ?? '').startsWith('image/');
       if (!isImage) {
+        await message.delete().catch(() => {});
         await channel.send({ embeds: [errorEmbed('Please upload an image file (PNG, JPG, GIF, or WEBP).')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
@@ -519,23 +519,28 @@ export async function handleRoleSetupMessage(message) {
       });
 
       try {
-        // Step 1 — Download the image using Node https (never use native fetch for Discord URLs)
-        const imageBuffer = await downloadImage(att.proxyURL ?? att.url);
+        // Step 1 — Download BEFORE deleting the message.
+        // att.proxyURL (media.discordapp.net) returns 404 from external servers — use att.url (cdn).
+        // Both have signed expiry params that can become invalid after message deletion.
+        const imageBuffer = await downloadImage(att.url);
 
-        // Step 2 — Delete stale temp emoji from a previous upload in this session
+        // Step 2 — Message downloaded successfully; safe to delete now
+        await message.delete().catch(() => {});
+
+        // Step 3 — Delete stale temp emoji from a previous upload in this session
         if (session.iconTempEmojiId) {
           await guild.emojis.delete(session.iconTempEmojiId, 'Replaced by new upload').catch(() => {});
           session.iconTempEmojiId = null;
         }
 
-        // Step 3 — Upload as a server emoji (Discord handles all resizing internally)
+        // Step 4 — Upload as a server emoji (Discord handles all resizing internally)
         const tempEmoji = await guild.emojis.create({
           attachment: imageBuffer,
           name:       'tmpricon',
           reason:     'Temp role icon — auto-deleted after save',
         });
 
-        // Step 4 — Store the emoji ID in session; resolveIconFields uses it at Save time
+        // Step 5 — Store the emoji ID in session; resolveIconFields uses it at Save time
         session.iconType        = 'custom';
         session.iconValue       = null;          // not displayed; emojiId is the source of truth
         session.iconTempEmojiId = tempEmoji.id;
@@ -550,6 +555,7 @@ export async function handleRoleSetupMessage(message) {
         await refreshSetupMessage(channel, session);
 
       } catch (err) {
+        await message.delete().catch(() => {});
         await processingMsg.delete().catch(() => {});
         console.error('[roleSetup] Emoji upload error:', err);
         await channel.send({

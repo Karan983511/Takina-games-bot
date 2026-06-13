@@ -40,7 +40,7 @@ async function startGracePeriod(guild, userId, user, graceDays, client) {
   }
 
   // Schedule actual deletion
-  const delayMs = 60 * 1000; // TEST — revert after testing
+  const delayMs = graceDays * 24 * 60 * 60 * 1000;
   const timer = setTimeout(async () => {
     try {
       const freshMember = await guild.members.fetch(userId).catch(() => null);

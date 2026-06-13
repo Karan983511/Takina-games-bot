@@ -166,13 +166,15 @@ async function buildBoundaries(settings, guild) {
 }
 
 async function buildRotation(settings) {
-  const r = settings.rotation;
+  const r    = settings.rotation;
+  const mode = r.mode ?? 'sequential';
   const embed = new EmbedBuilder()
     .setColor(0xF47FFF)
     .setTitle('🔄 Boundary Rotation')
     .setDescription(
-      'The rotation service periodically checks that all active booster roles are within the configured boundaries.\n\n' +
+      'Periodically rotates bot-tracked roles within the configured boundaries.\n\n' +
       `**Status:** ${tick(r.enabled)} ${label(r.enabled)}\n` +
+      `**Mode:** ${mode === 'random' ? '🎲 Random — a random role is moved to the top each cycle' : '🔁 Sequential — top role cycles to the bottom each cycle'}\n` +
       `**Frequency:** ${r.enabled ? freq(r.frequency) : '—'}` +
       (r.frequency === 'custom' && r.enabled ? `\n**Interval:** ${r.customIntervalMinutes} minutes` : '')
     );
@@ -181,6 +183,9 @@ async function buildRotation(settings) {
     new ButtonBuilder().setCustomId('bsetup_rotation_toggle')
       .setLabel(r.enabled ? 'Disable Rotation' : 'Enable Rotation')
       .setStyle(r.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bsetup_rotation_mode')
+      .setLabel(mode === 'random' ? '🔁 Switch to Sequential' : '🎲 Switch to Random')
+      .setStyle(ButtonStyle.Secondary),
   );
 
   const row2 = new ActionRowBuilder().addComponents(
@@ -465,6 +470,14 @@ export async function handleComponent(interaction, client) {
     return interaction.update(payload);
   }
 
+  if (id === 'bsetup_rotation_mode') {
+    const settings = await getSettings(guildId);
+    settings.rotation.mode = (settings.rotation.mode ?? 'sequential') === 'random' ? 'sequential' : 'random';
+    await settings.save();
+    const payload = await getSectionPayload('rotation', settings, interaction.guild);
+    return interaction.update(payload);
+  }
+
   if (id === 'bsetup_rotation_freq') {
     const freq     = interaction.values[0];
     const settings = await getSettings(guildId);
@@ -652,3 +665,4 @@ export async function handleComponent(interaction, client) {
 }
 
 export default { data, execute, handleComponent };
+

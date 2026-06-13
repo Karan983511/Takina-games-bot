@@ -314,6 +314,7 @@ async function buildSystem(guildId, guild) {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('bsetup_stats').setLabel('↻ Refresh').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('bsetup_test_dm').setLabel('📨 Test DMs').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('bsetup_reset_open').setLabel('Reset All Settings').setStyle(ButtonStyle.Danger),
   );
 
@@ -634,6 +635,34 @@ export async function handleComponent(interaction, client) {
     const settings = await getSettings(guildId);
     const payload  = await getSectionPayload('system', settings, interaction.guild);
     return interaction.update(payload);
+  }
+
+  if (id === 'bsetup_test_dm') {
+    const settings  = await getSettings(guildId);
+    const graceDays = settings?.gracePeriod?.enabled !== false ? (settings?.gracePeriod?.days ?? 3) : 0;
+    const retDays   = settings?.retention?.days ?? 7;
+    const user      = interaction.user;
+    const guildName = interaction.guild.name;
+    const roleName  = 'Test Role ✨';
+    const deadline  = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000);
+    const deadlineStr = deadline.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    try {
+      // DM 1: grace-start
+      await user.send(
+        `💔 **You've stopped boosting ${guildName}.**\n\n` +
+        `Your custom role **${roleName}** is still active and will be kept for **${graceDays} day${graceDays !== 1 ? 's' : ''}** ` +
+        `(until **${deadlineStr}**). If you boost again before then, nothing will change.\n\n` +
+        `After ${deadlineStr}, your role will be automatically removed. If you boost again within ${retDays} days after that, your role will be **automatically restored**.`
+      );
+      // DM 2: grace-expiry
+      await user.send(
+        `🗑️ Your grace period on **${guildName}** has ended. Your custom role **${roleName}** has been removed.\n` +
+        `Your settings are saved for **${retDays} days** — if you boost again within that time, your role will be **automatically restored**.`
+      );
+      return interaction.reply({ content: '✅ Both DMs sent! Check your DMs.', flags: MessageFlags.Ephemeral });
+    } catch {
+      return interaction.reply({ content: '❌ Could not send DMs — make sure your DMs are open.', flags: MessageFlags.Ephemeral });
+    }
   }
 
   if (id === 'bsetup_reset_open') {

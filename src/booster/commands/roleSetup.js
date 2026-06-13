@@ -55,7 +55,7 @@ function buildSetupEmbed(session) {
   let iconDisplay = '*Not set*';
   if (session.iconType === 'emoji')  iconDisplay = session.iconValue;
   if (session.iconType === 'custom') iconDisplay = session.iconValue;
-  if (session.iconType === 'image')  iconDisplay = session.iconBuffer ? '📷 Image ready to apply' : '📷 Image (saved — re-upload to change)';
+  if (session.iconType === 'image')  iconDisplay = session.iconUrl ? '📷 Image ready to apply' : '📷 Image (saved — re-upload to change)';
 
   const embedColor = color1 ? parseInt(color1.replace('#', ''), 16) : 0x5865F2;
 
@@ -105,8 +105,7 @@ export async function execute(message) {
       color2:    existing?.colorSecondary ?? null,
       iconType:  null,
       iconValue: null,
-      iconBuffer: null,
-      iconMime:   null,
+      iconUrl: null,
       ...(existing?.icon && !isStaleDataURI
         ? { iconType: isCustomEmoji ? 'custom' : isDiscordHosted ? 'image' : 'emoji',
             iconValue: isDiscordHosted ? 'discord_hosted' : existing.icon }
@@ -144,7 +143,7 @@ function buildPreviewEmbed(session) {
   let iconLine = 'None';
   if (session.iconType === 'emoji')  iconLine = session.iconValue;
   if (session.iconType === 'custom') iconLine = session.iconValue;
-  if (session.iconType === 'image')  iconLine = session.iconBuffer ? '📷 Custom image' : '📷 Image (Discord-hosted)';
+  if (session.iconType === 'image')  iconLine = session.iconUrl ? '📷 Custom image' : '📷 Image (Discord-hosted)';
   return new EmbedBuilder()
     .setColor(parseInt(color1.replace('#', ''), 16))
     .setTitle(`🎨 Preview — ${name}`)
@@ -265,28 +264,11 @@ export async function handleRoleSetupInteraction(interaction, client) {
           }
         }
         if (session.iconType === 'emoji') return { unicodeEmoji: session.iconValue, icon: null };
-        // image: temp-emoji trick — upload buffer as emoji, fetch CDN URL, delete emoji
-        // Falls back to direct data URI if the bot lacks MANAGE_EMOJIS permission or guild has no slots
-        if (session.iconType === 'image' && session.iconBuffer) {
-          try {
-            const tempEmoji = await guild.emojis.create({
-              attachment: session.iconBuffer,
-              name: 'tmpricon',
-              reason: 'Temporary upload for role icon',
-            });
-            const ext = tempEmoji.animated ? 'gif' : 'png';
-            const r   = await fetch(`https://cdn.discordapp.com/emojis/${tempEmoji.id}.${ext}`);
-            const buf = Buffer.from(await r.arrayBuffer());
-            await tempEmoji.delete('Role icon applied — removing temp emoji').catch(() => {});
-            return { icon: `data:image/${ext};base64,${buf.toString('base64')}`, unicodeEmoji: null };
-          } catch {
-            // Fallback: convert buffer directly (skips temp-emoji step)
-            const mime = session.iconMime ?? 'image/png';
-            return { icon: `data:${mime};base64,${session.iconBuffer.toString('base64')}`, unicodeEmoji: null };
-          }
+        // image: pass the proxyURL directly — Discord.js resolves it via undici internally
+        if (session.iconType === 'image' && session.iconUrl) {
+          return { icon: session.iconUrl, unicodeEmoji: null };
         }
-        // No buffer = previously saved discord-hosted icon — preserve existing role icon as-is
-        return {};
+        // No URL = previously saved discord-hosted icon — preserve existing role icon as-is
         return {};
       }
 
@@ -418,8 +400,8 @@ export async function handleRoleSetupMessage(message) {
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
       const allowed = ['image/png', 'image/jpeg', 'image/webp'];
+      await message.delete().catch(() => {});
       if (!allowed.some(t => (att.contentType ?? '').startsWith(t))) {
-        await message.delete().catch(() => {});
         await channel.send({ embeds: [errorEmbed('Invalid file type. Only PNG, JPG, or WEBP images are supported.')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
@@ -427,39 +409,24 @@ export async function handleRoleSetupMessage(message) {
         return true;
       }
       if (att.size > 256 * 1024) {
-        await message.delete().catch(() => {});
         await channel.send({ embeds: [errorEmbed('Image too large. Role icons must be under 256 KB.')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session);
         return true;
       }
-      try {
-        // Fetch BEFORE deleting — deletion invalidates the CDN URL
-        const res = await fetch(att.url);
-        if (!res.ok) throw new Error(`fetch ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        await message.delete().catch(() => {});   // safe to delete now
-        const ct  = (att.contentType ?? 'image/png').split(';')[0].trim();
-        session.iconType   = 'image';
-        session.iconValue  = null;
-        session.iconBuffer = buf;   // buffer kept in memory only, never stored in DB
-        session.iconMime   = ct;
-        setSession(guild.id, author.id, session);
-        const freshG = await guild.fetch().catch(() => guild);
-        const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
-        await channel.send({ embeds: [successEmbed(`✅ Image icon saved. It will be applied when you click **Save**.${note}`)] })
-          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-        await refreshSetupMessage(channel, session);
-        return true;
-      } catch {
-        await message.delete().catch(() => {});
-        await channel.send({ embeds: [errorEmbed('Failed to download your image. Please try again.')] })
-          .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-        session.awaitingInput = 'icon';
-        setSession(guild.id, author.id, session);
-        return true;
-      }
+      // Store the proxyURL — no manual fetch needed.
+      // Discord.js resolves the URL internally (via undici) when the role is saved.
+      session.iconType  = 'image';
+      session.iconValue = null;
+      session.iconUrl   = att.proxyURL;
+      setSession(guild.id, author.id, session);
+      const freshG = await guild.fetch().catch(() => guild);
+      const note = freshG.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
+      await channel.send({ embeds: [successEmbed(`✅ Image icon saved. It will be applied when you click **Save**.${note}`)] })
+        .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      await refreshSetupMessage(channel, session);
+      return true;
     }
 
     // Text / emoji input — safe to delete immediately (no attachment URL to preserve)
@@ -467,9 +434,9 @@ export async function handleRoleSetupMessage(message) {
     const text = message.content.trim();
     const customMatch = text.match(/^<a?:\w+:\d+>$/);
     if (customMatch) {
-      session.iconType   = 'custom';
-      session.iconValue  = text;
-      session.iconBuffer = null;
+      session.iconType  = 'custom';
+      session.iconValue = text;
+      session.iconUrl   = null;
       setSession(guild.id, author.id, session);
       const freshG2 = await guild.fetch().catch(() => guild);
       const note = freshG2.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';
@@ -481,9 +448,9 @@ export async function handleRoleSetupMessage(message) {
 
     const unicodeEmojiPattern = /^\p{Emoji_Presentation}|\p{Extended_Pictographic}$/u;
     if (unicodeEmojiPattern.test(text) && [...text].length <= 4) {
-      session.iconType   = 'emoji';
-      session.iconValue  = text;
-      session.iconBuffer = null;
+      session.iconType  = 'emoji';
+      session.iconValue = text;
+      session.iconUrl   = null;
       setSession(guild.id, author.id, session);
       const freshG3 = await guild.fetch().catch(() => guild);
       const note = freshG3.premiumTier >= 2 ? '' : '\n> ⚠️ Icon saved but will only apply once the server reaches boost level 2.';

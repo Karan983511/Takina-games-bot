@@ -648,17 +648,25 @@ export async function handleComponent(interaction, client) {
     const deadlineStr = deadline.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     try {
       // DM 1: grace-start
-      await user.send(
-        `💔 **You've stopped boosting ${guildName}.**\n\n` +
-        `Your custom role **${roleName}** is still active and will be kept for **${graceDays} day${graceDays !== 1 ? 's' : ''}** ` +
-        `(until **${deadlineStr}**). If you boost again before then, nothing will change.\n\n` +
-        `After ${deadlineStr}, your role will be automatically removed. If you boost again within ${retDays} days after that, your role will be **automatically restored**.`
-      );
+      await user.send({ embeds: [new EmbedBuilder()
+        .setColor(0xF47FFF)
+        .setTitle('💔 You’ve stopped boosting')
+        .setDescription(
+          `**${guildName}** — your boost has ended.\n\n` +
+          `Your custom role **${roleName}** is still active and will be kept for **${graceDays} day${graceDays !== 1 ? 's' : ''}** (until **${deadlineStr}**).\n` +
+          `If you boost again before then, nothing will change.`
+        )
+        .addFields({ name: 'After grace period', value: `Your role will be automatically removed. If you boost again within **${retDays} days**, it will be **automatically restored**.` })
+        .setFooter({ text: 'This is a test DM — no action needed.' })
+        .setTimestamp()] });
       // DM 2: grace-expiry
-      await user.send(
-        `🗑️ Your grace period on **${guildName}** has ended. Your custom role **${roleName}** has been removed.\n` +
-        `Your settings are saved for **${retDays} days** — if you boost again within that time, your role will be **automatically restored**.`
-      );
+      await user.send({ embeds: [new EmbedBuilder()
+        .setColor(0xED4245)
+        .setTitle('🗑️ Grace Period Ended')
+        .setDescription(`Your grace period on **${guildName}** has ended.\nYour custom role **${roleName}** has been removed.`)
+        .addFields({ name: 'Want it back?', value: `Your settings are saved for **${retDays} days** — if you boost again within that time, your role will be **automatically restored**.` })
+        .setFooter({ text: 'This is a test DM — no action needed.' })
+        .setTimestamp()] });
       return interaction.reply({ content: '✅ Both DMs sent! Check your DMs.', flags: MessageFlags.Ephemeral });
     } catch {
       return interaction.reply({ content: '❌ Could not send DMs — make sure your DMs are open.', flags: MessageFlags.Ephemeral });

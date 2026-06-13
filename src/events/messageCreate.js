@@ -50,6 +50,7 @@ export default {
                   '`.role give @user` — Share your role with another member',
                   '`.role remove @user` — Remove a member from your role',
                   '`.role removeme` — Remove yourself from a role shared with you',
+                  '`.role reset` — Reset your role to default settings (keeps the role)',
                   '`.role delete` — Permanently delete your custom role',
                 ].join('\n'),
               },
@@ -244,6 +245,37 @@ export default {
         });
       }
 
+      // .role reset — wipe name/color/icon back to defaults without deleting the role
+      if (sub === 'reset') {
+        const role = await BoosterRole.findOne({ guildId: guild.id, userId: author.id, active: true });
+        if (!role) {
+          return message.channel.send({
+            embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role to reset.")],
+          });
+        }
+        return message.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xFEE75C)
+              .setTitle('🔄 Reset Custom Role')
+              .setDescription(
+                `This will reset **${role.name}** back to default settings:\n\n` +
+                '• Name → `Booster Role`\n' +
+                '• Color → `#99AAB5` (Discord default grey)\n' +
+                '• Icon → removed\n\n' +
+                '**Your role will not be deleted.** Shared members keep the role.\n\n' +
+                'Are you sure?'
+              ),
+          ],
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`rolereset_confirm_${author.id}`).setLabel('Yes, reset my role').setStyle(ButtonStyle.Danger),
+              new ButtonBuilder().setCustomId(`rolereset_cancel_${author.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary),
+            ),
+          ],
+        });
+      }
+
       // Unknown .role subcommand — show role-specific help
       if (sub && sub !== 'setup') {
         return message.channel.send({
@@ -254,6 +286,7 @@ export default {
               { name: '`.role give @user`',   value: 'Give your custom role to another member' },
               { name: '`.role remove @user`', value: 'Remove a member from your custom role' },
               { name: '`.role removeme`',     value: 'Remove yourself from a role that was shared with you' },
+              { name: '`.role reset`',        value: 'Reset your role back to default name/color/icon (keeps the role, just wipes settings)' },
               { name: '`.role delete`',       value: 'Permanently delete your custom role' },
             )
             .setFooter({ text: 'Type .help for the full command list.' })],

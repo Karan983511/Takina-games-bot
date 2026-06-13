@@ -92,12 +92,13 @@ async function buildFeatures(settings) {
     .setTitle('🎨 Feature Toggles')
     .setDescription('Click a button to toggle a feature on or off.')
     .addFields(
-      { name: `${tick(f.customRoles)} Custom Roles`,   value: 'Allows eligible members to create their own custom role', inline: true },
-      { name: `${tick(f.roleSharing)} Role Sharing`,   value: 'Allows role owners to share with other members',          inline: true },
-      { name: `${tick(f.roleTemplates)} Templates`,    value: 'Color templates available in the role wizard',            inline: true },
+      { name: `${tick(f.customRoles)} Custom Roles`,     value: 'Allows eligible members to create their own custom role', inline: true },
+      { name: `${tick(f.roleSharing)} Role Sharing`,     value: 'Allows role owners to share with other members',          inline: true },
+      { name: `${tick(f.roleTemplates)} Templates`,      value: 'Color templates available in the role wizard',            inline: true },
+      { name: `${tick(f.gracePeriodDms ?? true)} Grace Period DMs`, value: 'DM members when boost grace period starts and expires', inline: true },
     );
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('bsetup_toggle_customRoles')
       .setLabel(`${f.customRoles ? 'Disable' : 'Enable'} Custom Roles`)
       .setStyle(f.customRoles ? ButtonStyle.Danger : ButtonStyle.Success),
@@ -109,7 +110,14 @@ async function buildFeatures(settings) {
       .setStyle(f.roleTemplates ? ButtonStyle.Danger : ButtonStyle.Success),
   );
 
-  return { embeds: [embed], components: [row] };
+  const dmEnabled = f.gracePeriodDms ?? true;
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('bsetup_toggle_gracePeriodDms')
+      .setLabel(`${dmEnabled ? 'Disable' : 'Enable'} Grace Period DMs`)
+      .setStyle(dmEnabled ? ButtonStyle.Danger : ButtonStyle.Success),
+  );
+
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 async function buildEligibility(settings, guild) {

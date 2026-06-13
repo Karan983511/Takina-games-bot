@@ -15,6 +15,7 @@ const schema = new mongoose.Schema({
   manuallyLinked: { type: Boolean, default: false },
   softDeletedAt:  { type: Date, default: null },
   leftGuildAt:    { type: Date, default: null },
+  boostLostAt:    { type: Date, default: null },  // set when grace period starts
 }, { timestamps: true });
 
 schema.index({ guildId: 1, userId: 1 });

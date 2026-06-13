@@ -1,5 +1,6 @@
 import { Events, ActivityType } from 'discord.js';
 import { registerCommands } from '../handlers/commandLoader.js';
+import { runStartupEmojiSweep } from '../booster/services/emojiCleanupService.js';
 
 export default {
   name: Events.ClientReady,
@@ -13,6 +14,13 @@ export default {
       await registerCommands(client);
     } catch (err) {
       console.error('[Takina Games] Failed to register commands:', err.message);
+    }
+
+    // Sweep orphaned tmpricon emojis from any previous crashed sessions
+    try {
+      await runStartupEmojiSweep(client);
+    } catch (err) {
+      console.error('[Takina Games] Emoji sweep error:', err.message);
     }
 
     // Set bot presence

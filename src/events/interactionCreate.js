@@ -62,6 +62,56 @@ export default {
       return;
     }
 
+    // ── .role reset confirm/cancel ─────────────────────────────────────────────
+    if (customId?.startsWith('rolereset_')) {
+      const parts   = customId.split('_');
+      const action  = parts[1];
+      const ownerId = parts[2];
+
+      if (interaction.user.id !== ownerId) {
+        return interaction.reply({ content: "⛔ This isn't your confirmation.", flags: MessageFlags.Ephemeral });
+      }
+
+      if (action === 'cancel') {
+        return interaction.update({
+          embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription('✅ Reset cancelled — nothing changed.')],
+          components: [],
+        });
+      }
+
+      if (action === 'confirm') {
+        try {
+          const guild = interaction.guild;
+          const { default: BoosterRoleModel } = await import('../booster/models/BoosterRole.js');
+          const doc = await BoosterRoleModel.findOne({ guildId: guild.id, userId: ownerId, active: true });
+          if (!doc) {
+            return interaction.update({
+              embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription('⚠️ No active role found.')],
+              components: [],
+            });
+          }
+          const discordRole = guild.roles.cache.get(doc.roleId);
+          if (discordRole) {
+            await discordRole.edit({ name: 'Booster Role', color: 0x99AAB5, icon: null, unicodeEmoji: null }).catch(() => {});
+          }
+          doc.name = 'Booster Role'; doc.color = '#99AAB5'; doc.colorSecondary = null;
+          doc.iconType = 'none'; doc.icon = null;
+          await doc.save();
+          return interaction.update({
+            embeds: [new EmbedBuilder().setColor(0x57F287).setDescription('✅ Your role has been reset to defaults. Use `.role setup` to customize it again.')],
+            components: [],
+          });
+        } catch (err) {
+          console.error('[InteractionCreate] rolereset error:', err);
+          return interaction.update({
+            embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Reset failed: ${err.message}`)],
+            components: [],
+          });
+        }
+      }
+      return;
+    }
+
     // ── .role delete confirm/cancel ────────────────────────────────────────────
     if (customId?.startsWith('roledelete_')) {
       const parts  = customId.split('_');

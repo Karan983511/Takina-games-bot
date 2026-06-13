@@ -15,6 +15,44 @@ import { getPage } from '../commands/help.js';
 export async function handleBoosterInteraction(interaction, client) {
   const id = interaction.customId;
 
+  // ── .role reset confirm/cancel ──────────────────────────────────────────────
+  if (id.startsWith('rolereset_confirm_') || id.startsWith('rolereset_cancel_')) {
+    const ownerId = id.split('_').pop();
+    if (interaction.user.id !== ownerId) {
+      return interaction.reply({ embeds: [errorEmbed('This confirmation is not for you.')], flags: MessageFlags.Ephemeral });
+    }
+    if (id.startsWith('rolereset_cancel_')) {
+      await interaction.message.delete().catch(() => {});
+      return interaction.reply({ embeds: [successEmbed('Reset cancelled.')], flags: MessageFlags.Ephemeral });
+    }
+    // Confirm reset
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const guild = interaction.guild;
+      const doc   = await BoosterRole.findOne({ guildId: guild.id, userId: ownerId, active: true });
+      if (!doc) {
+        await interaction.message.delete().catch(() => {});
+        return interaction.editReply({ embeds: [errorEmbed('No active role found.')] });
+      }
+      const discordRole = guild.roles.cache.get(doc.roleId);
+      if (discordRole) {
+        await discordRole.edit({ name: 'Booster Role', color: 0x99AAB5, icon: null, unicodeEmoji: null }).catch(() => {});
+      }
+      doc.name           = 'Booster Role';
+      doc.color          = '#99AAB5';
+      doc.colorSecondary = null;
+      doc.iconType       = 'none';
+      doc.icon           = null;
+      await doc.save();
+      await audit(client, guild.id, ownerId, 'ROLE_RESET', { roleId: doc.roleId });
+      await interaction.message.delete().catch(() => {});
+      return interaction.editReply({ embeds: [successEmbed(`Your role has been reset to defaults. Use \`.role setup\` to customize it again.`)] });
+    } catch (err) {
+      console.error('[interactions] rolereset error:', err);
+      return interaction.editReply({ embeds: [errorEmbed(`Reset failed: ${err.message}`)] });
+    }
+  }
+
   if (id.startsWith('booster_help_')) {
     const { embed, row } = getPage(id.replace('booster_help_', ''));
     return interaction.update({ embeds: [embed], components: [row] });

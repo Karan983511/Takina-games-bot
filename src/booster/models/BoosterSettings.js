@@ -4,9 +4,10 @@ const schema = new mongoose.Schema({
   guildId: { type: String, required: true, unique: true },
 
   features: {
-    customRoles:   { type: Boolean, default: true },
-    roleSharing:   { type: Boolean, default: true },
-    roleTemplates: { type: Boolean, default: true },
+    customRoles:    { type: Boolean, default: true },
+    roleSharing:    { type: Boolean, default: true },
+    roleTemplates:  { type: Boolean, default: true },
+    gracePeriodDms: { type: Boolean, default: true },
   },
 
   eligibilityRoleId: { type: String, default: null },
@@ -24,6 +25,11 @@ const schema = new mongoose.Schema({
 
   retention: {
     days: { type: Number, default: 7, min: 1, max: 365 },
+  },
+
+  gracePeriod: {
+    enabled: { type: Boolean, default: true },
+    days:    { type: Number, default: 3, min: 0, max: 30 },
   },
 
   logChannelId: { type: String, default: null },

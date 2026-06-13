@@ -135,7 +135,7 @@ export async function runGraceExpirySweep(client) {
                 if (user) {
                   await user.send(
                     `\ud83d\uddd1\ufe0f Your grace period on **${guild.name}** has ended. Your custom role **${doc.name}** has been removed.\n` +
-                    `Your settings are saved \u2014 if you boost again within ${retDays} days, use \`.booster restore\` to get your role back.`
+                    `Your settings are saved for **${retDays} days** — if you boost again within that time, your role will be **automatically restored**.`
                   ).catch(() => {});
                 }
               } catch { /* DMs closed */ }
@@ -174,7 +174,7 @@ export async function runGraceExpirySweep(client) {
                   if (user) {
                     await user.send(
                       `\ud83d\uddd1\ufe0f Your grace period on **${guild.name}** has ended. Your custom role **${docName}** has been removed.\n` +
-                      `Your settings are saved \u2014 if you boost again within ${latestSettings?.retention?.days ?? 7} days, use \`.booster restore\` to get your role back.`
+                      `Your settings are saved for **${latestSettings?.retention?.days ?? 7} days** — if you boost again within that time, your role will be **automatically restored**.`
                     ).catch(() => {});
                   }
                 } catch { /* DMs closed */ }

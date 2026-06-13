@@ -2,29 +2,81 @@ import BoosterRole from '../models/BoosterRole.js';
 import BoosterSettings from '../models/BoosterSettings.js';
 import { getInsertPosition, assertBoundary } from '../utils/boundary.js';
 import { log } from '../utils/logger.js';
+import {
+  buildRoleColorsPayload,
+  syncRoleColors,
+  supportsEnhancedRoleColors,
+} from './discordRoleColorApi.js';
 
-export async function createBoosterRole(guild, userId, { name, color, icon, template }) {
-  const position  = await getInsertPosition(guild);
+function roleHex(role) {
+  return role?.hexColor ?? '#99AAB5';
+}
+
+function readStoredColorsFromDiscordRole(discordRole) {
+  // discord.js may not expose the enhanced role color object yet; this is best-effort.
+  const raw = discordRole?.colors ?? discordRole?.colorData ?? null;
+  if (raw && typeof raw === 'object') {
+    const primary =
+      raw.primary_color ??
+      raw.primaryColor ??
+      raw.primary ??
+      null;
+    const secondary =
+      raw.secondary_color ??
+      raw.secondaryColor ??
+      raw.secondary ??
+      null;
+
+    if (primary !== null || secondary !== null) {
+      return {
+        primary: primary !== null ? `#${Number(primary).toString(16).padStart(6, '0')}` : roleHex(discordRole),
+        secondary: secondary !== null ? `#${Number(secondary).toString(16).padStart(6, '0')}` : null,
+      };
+    }
+  }
+
+  return { primary: roleHex(discordRole), secondary: null };
+}
+
+async function applyRoleColors(guild, roleId, primary, secondary = null) {
+  const colors = buildRoleColorsPayload({
+    primary,
+    secondary: supportsEnhancedRoleColors(guild) ? secondary : null,
+  });
+  await syncRoleColors(guild, roleId, {
+    primary,
+    secondary,
+  }).catch((err) => {
+    // Keep the role functional even if the style sync fails.
+    log('warn', 'RoleService', `Failed to sync enhanced colors for ${roleId}: ${err.message}`);
+  });
+  return colors;
+}
+
+export async function createBoosterRole(guild, userId, { name, color, colorSecondary = null, icon, template }) {
+  const position = await getInsertPosition(guild);
   const roleData  = { name, color: color || '#99AAB5', hoist: false, mentionable: false };
   if (icon) roleData.icon = icon;
 
   const discordRole = await guild.roles.create(roleData);
   await discordRole.setPosition(position).catch(() => {});
+  await applyRoleColors(guild, discordRole.id, color || '#99AAB5', colorSecondary);
   log('info', 'RoleService', `Created role ${discordRole.id} (${name}) for ${userId}`);
 
   const doc = await BoosterRole.findOneAndUpdate(
     { guildId: guild.id, userId },
     {
       $set: {
-        roleId:        discordRole.id,
+        roleId:         discordRole.id,
         name,
-        color:         color || '#99AAB5',
-        icon:          icon  || null,
-        template:      template || null,
-        active:        true,
+        color:          color || '#99AAB5',
+        colorSecondary:  colorSecondary || null,
+        icon:           icon  || null,
+        template:       template || null,
+        active:         true,
         manuallyLinked: false,
-        softDeletedAt: null,
-        leftGuildAt:   null,
+        softDeletedAt:  null,
+        leftGuildAt:    null,
       },
     },
     { upsert: true, new: true },
@@ -52,6 +104,10 @@ export async function editBoosterRole(guild, userId, updates) {
   if (updates.icon  !== undefined) { patch.icon  = updates.icon;  doc.icon  = updates.icon;  }
 
   await discordRole.edit(patch);
+  if (updates.color !== undefined || updates.colorSecondary !== undefined) {
+    doc.colorSecondary = updates.colorSecondary ?? null;
+    await applyRoleColors(guild, discordRole.id, doc.color, doc.colorSecondary);
+  }
   await doc.save();
   return { doc, discordRole };
 }
@@ -85,13 +141,16 @@ export async function linkExistingRole(guild, userId, roleId) {
     }
   }
 
+  const storedColors = readStoredColorsFromDiscordRole(discordRole);
+
   const doc = await BoosterRole.findOneAndUpdate(
     { guildId: guild.id, userId },
     {
       $set: {
         roleId,
         name:           discordRole.name,
-        color:          discordRole.hexColor ?? '#99AAB5',
+        color:          storedColors.primary,
+        colorSecondary:  storedColors.secondary,
         active:         true,
         manuallyLinked: true,
         softDeletedAt:  null,
@@ -159,6 +218,7 @@ export async function restoreRole(guild, userId) {
   const discordRole = await guild.roles.create(roleData).catch(() => null);
   if (!discordRole) return null;
   await discordRole.setPosition(position).catch(() => {});
+  await applyRoleColors(guild, discordRole.id, doc.color, doc.colorSecondary);
 
   doc.roleId        = discordRole.id;
   doc.active        = true;

@@ -529,9 +529,10 @@ export async function handleRoleSetupMessage(message) {
       } catch (err) {
         await processingMsg.delete().catch(() => {});
         console.error('[roleSetup] Image upload error:', err);
+        const errMsg = err?.message ?? String(err);
         await channel.send({
-          embeds: [errorEmbed('Failed to process your image. Make sure the bot has **Manage Emojis** permission and the server has free emoji slots.')],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 6000));
+          embeds: [errorEmbed(`❌ Image error: ${errMsg.slice(0, 200)}`)],
+        }).then(m => setTimeout(() => m.delete().catch(() => {}), 15000));
         session.awaitingInput = 'icon';
         setSession(guild.id, author.id, session, guild);
       }

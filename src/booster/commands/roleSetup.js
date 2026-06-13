@@ -412,12 +412,14 @@ export async function handleRoleSetupMessage(message) {
   }
 
   if (input === 'icon') {
-    await message.delete().catch(() => {});
+    // NOTE: do NOT delete the message yet for attachments — Discord invalidates
+    // the CDN URL as soon as the message is deleted, causing fetch() to 404.
 
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
       const allowed = ['image/png', 'image/jpeg', 'image/webp'];
       if (!allowed.some(t => (att.contentType ?? '').startsWith(t))) {
+        await message.delete().catch(() => {});
         await channel.send({ embeds: [errorEmbed('Invalid file type. Only PNG, JPG, or WEBP images are supported.')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
@@ -425,6 +427,7 @@ export async function handleRoleSetupMessage(message) {
         return true;
       }
       if (att.size > 256 * 1024) {
+        await message.delete().catch(() => {});
         await channel.send({ embeds: [errorEmbed('Image too large. Role icons must be under 256 KB.')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
@@ -432,12 +435,12 @@ export async function handleRoleSetupMessage(message) {
         return true;
       }
       try {
+        // Fetch BEFORE deleting — deletion invalidates the CDN URL
         const res = await fetch(att.url);
         if (!res.ok) throw new Error(`fetch ${res.status}`);
-        const buf  = Buffer.from(await res.arrayBuffer());
-        // Strip params ("image/png; charset=utf-8" → "image/png"), convert to data URI now
-        // so we never pass a raw Buffer to Discord.js (it always encodes those as image/jpg)
-        const ct   = (att.contentType ?? 'image/png').split(';')[0].trim();
+        const buf = Buffer.from(await res.arrayBuffer());
+        await message.delete().catch(() => {});   // safe to delete now
+        const ct  = (att.contentType ?? 'image/png').split(';')[0].trim();
         session.iconType   = 'image';
         session.iconValue  = null;
         session.iconBuffer = buf;   // buffer kept in memory only, never stored in DB
@@ -450,6 +453,7 @@ export async function handleRoleSetupMessage(message) {
         await refreshSetupMessage(channel, session);
         return true;
       } catch {
+        await message.delete().catch(() => {});
         await channel.send({ embeds: [errorEmbed('Failed to download your image. Please try again.')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';
@@ -458,6 +462,8 @@ export async function handleRoleSetupMessage(message) {
       }
     }
 
+    // Text / emoji input — safe to delete immediately (no attachment URL to preserve)
+    await message.delete().catch(() => {});
     const text = message.content.trim();
     const customMatch = text.match(/^<a?:\w+:\d+>$/);
     if (customMatch) {

@@ -428,9 +428,14 @@ export async function handleRoleSetupMessage(message) {
     if (message.attachments.size > 0) {
       const att = message.attachments.first();
       // Discord emoji API supports PNG, JPG, GIF — not WEBP
-      const allowed = ['image/png', 'image/jpeg', 'image/gif'];
+      // Fall back to file extension when contentType is null/missing (Discord sometimes omits it)
+      const ext = (att.name ?? '').split('.').pop().toLowerCase();
+      const allowedExt  = ['png', 'jpg', 'jpeg', 'gif'];
+      const allowedMime = ['image/png', 'image/jpeg', 'image/gif'];
+      const ct = (att.contentType ?? '').split(';')[0].trim().toLowerCase();
+      const typeOk = (ct && allowedMime.some(t => ct.startsWith(t))) || (!ct && allowedExt.includes(ext));
       await message.delete().catch(() => {});
-      if (!allowed.some(t => (att.contentType ?? '').startsWith(t))) {
+      if (!typeOk) {
         await channel.send({ embeds: [errorEmbed('Invalid file type. Please use PNG, JPG, or GIF. (WEBP is not supported for role icons.)')] })
           .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
         session.awaitingInput = 'icon';

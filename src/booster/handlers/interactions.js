@@ -8,7 +8,6 @@ import { createBackup, exportBackupJSON } from '../services/backupService.js';
 import { getTemplates, getSettings, isEnabled } from '../services/settingsService.js';
 import { castVote } from '../services/voteService.js';
 import { normalizeHex, isBooster, isAdmin, clampUserLimit } from '../utils/validators.js';
-import { syncRoleColors } from '../services/discordRoleColorApi.js';
 import { errorEmbed, successEmbed } from '../utils/embeds.js';
 import { audit } from '../utils/logger.js';
 import { getPage } from '../commands/help.js';
@@ -38,7 +37,6 @@ export async function handleBoosterInteraction(interaction, client) {
       const discordRole = guild.roles.cache.get(doc.roleId);
       if (discordRole) {
         await discordRole.edit({ name: 'Booster Role', color: 0x99AAB5, icon: null, unicodeEmoji: null }).catch(() => {});
-        await syncRoleColors(guild, discordRole.id, { primary: '#99AAB5', secondary: null }).catch(() => {});
       }
       doc.name           = 'Booster Role';
       doc.color          = '#99AAB5';
@@ -112,8 +110,7 @@ export async function handleBoosterInteraction(interaction, client) {
     if (existing) return interaction.reply({ embeds: [errorEmbed(`You already have a role: <@&${existing.roleId}>. Use \`.booster edit\` to change it.`)], flags: MessageFlags.Ephemeral });
     return interaction.showModal(new ModalBuilder().setCustomId('booster_role_modal').setTitle('🎨 Custom Role Request').addComponents(
       new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_name').setLabel('Role Name').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setPlaceholder('e.g. Moonlight')),
-      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_color').setLabel('Primary Color (hex code)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7).setPlaceholder('#FF6B35')),
-      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_color_2').setLabel('Secondary Color (optional)').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(7).setPlaceholder('#6B35FF')),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_color').setLabel('Role Color (hex code)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(7).setPlaceholder('#FF6B35')),
     ));
   }
 
@@ -123,15 +120,11 @@ export async function handleBoosterInteraction(interaction, client) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const name  = interaction.fields.getTextInputValue('role_name').trim();
     const color = normalizeHex(interaction.fields.getTextInputValue('role_color').trim());
-    const color2Raw = interaction.fields.getTextInputValue('role_color_2')?.trim();
-    const colorSecondary = color2Raw ? normalizeHex(color2Raw) : null;
     if (!color) return interaction.editReply({ embeds: [errorEmbed('Invalid hex color. Use format `#FF6B35`.')] });
-    if (color2Raw && !colorSecondary) return interaction.editReply({ embeds: [errorEmbed('Secondary color is invalid. Use a hex code like `#6B35FF`.')] });
     try {
-      const { discordRole } = await createBoosterRole(interaction.guild, interaction.user.id, { name, color, colorSecondary });
-      await audit(client, interaction.guild.id, interaction.user.id, 'ROLE_CREATED', { name, color, colorSecondary, roleId: discordRole.id });
-      const note = colorSecondary ? (interaction.guild.features?.includes('ENHANCED_ROLE_COLORS') ? '' : '\n\n> ⚠️ Your server does not support Enhanced Role Colors yet, so only the primary color was applied.') : '';
-      return interaction.editReply({ embeds: [successEmbed(`Your custom role ${discordRole} has been created!${note}`)] });
+      const { discordRole } = await createBoosterRole(interaction.guild, interaction.user.id, { name, color });
+      await audit(client, interaction.guild.id, interaction.user.id, 'ROLE_CREATED', { name, color, roleId: discordRole.id });
+      return interaction.editReply({ embeds: [successEmbed(`Your custom role ${discordRole} has been created!`)] });
     } catch (err) { return interaction.editReply({ embeds: [errorEmbed(`Failed: ${err.message}`)] }); }
   }
 

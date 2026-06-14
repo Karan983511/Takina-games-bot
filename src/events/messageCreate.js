@@ -9,6 +9,7 @@ import {
 } from 'discord.js';
 import BoosterRole from '../booster/models/BoosterRole.js';
 import BoosterSettings from '../booster/models/BoosterSettings.js';
+import { buildRoleListPayload } from '../booster/utils/roleListBuilder.js';
 import { isBooster, isAdmin } from '../booster/utils/validators.js';
 
 function getRoleEmoji(role) {
@@ -47,6 +48,7 @@ export default {
                 value: [
                   '`.role setup` — Create or edit your custom booster role',
                   '`.role info` — View your role\'s name, color, icon & sharing',
+                  '`.role list` — See all active custom roles & next rotation time',
                   '`.role give @user` — Share your role with another member',
                   '`.role remove @user` — Remove a member from your role',
                   '`.role removeme` — Remove yourself from a role shared with you',
@@ -282,6 +284,13 @@ export default {
         });
       }
 
+      // .role list
+      if (sub === 'list') {
+        const settings = await BoosterSettings.findOne({ guildId: guild.id }).lean();
+        const payload  = await buildRoleListPayload(guild, settings, 0);
+        return message.channel.send(payload);
+      }
+
       // Unknown .role subcommand — show role-specific help
       if (sub && sub !== 'setup') {
         return message.channel.send({
@@ -294,6 +303,7 @@ export default {
               { name: '`.role removeme`',     value: 'Remove yourself from a role that was shared with you' },
               { name: '`.role reset`',        value: 'Reset your role back to default name/color/icon (keeps the role, just wipes settings)' },
               { name: '`.role delete`',       value: 'Permanently delete your custom role' },
+              { name: '`.role list`',         value: 'See all active custom roles in the server & when the next rotation fires' },
             )
             .setFooter({ text: 'Type .help for the full command list.' })],
         });

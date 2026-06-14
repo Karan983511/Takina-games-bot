@@ -32,18 +32,59 @@ async function _scheduleAll() {
   }
 }
 
+/**
+ * For daily/weekly/monthly: schedules at a fixed wall-clock time in the guild's timezone.
+ * For hourly/custom: plain interval.
+ */
+function _getNextMs(settings) {
+  const r    = settings.rotation;
+  const freq = r.frequency ?? 'daily';
+  if (freq === 'hourly' || freq === 'custom') return _freqToMs(freq, r.customIntervalMinutes);
+
+  const hour   = r.scheduledHour   ?? 0;
+  const minute = r.scheduledMinute ?? 0;
+  const tz     = r.timezone        ?? 'UTC';
+  const now    = Date.now();
+  const advDays = freq === 'weekly' ? 7 : freq === 'monthly' ? 30 : 1;
+
+  function tzTimeToUTCMs(baseMs) {
+    const dateParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(baseMs);
+    const [y, mo, d] = dateParts.split('-').map(Number);
+    const tentative = Date.UTC(y, mo - 1, d, hour, minute);
+    const fp = {};
+    for (const { type, value } of new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+    }).formatToParts(tentative)) fp[type] = value;
+    const hr          = fp.hour === '24' ? 0 : +fp.hour;
+    const displayedUTC = Date.UTC(+fp.year, +fp.month - 1, +fp.day, hr, +fp.minute, +(fp.second ?? 0));
+    return tentative + (tentative - displayedUTC);
+  }
+
+  let candidate = tzTimeToUTCMs(now);
+  if (candidate <= now + 30_000) candidate = tzTimeToUTCMs(now + advDays * 86_400_000);
+  return Math.max(1000, candidate - now);
+}
+
 async function _scheduleGuild(guildId) {
   const settings = await BoosterSettings.findOne({ guildId }).lean().catch(() => null);
   if (!settings?.rotation?.enabled) return;
 
-  const ms    = _freqToMs(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
+  const ms       = _getNextMs(settings);
+  const nextTime = new Date(Date.now() + ms);
+
+  // Persist so .role overview can display accurate ETA without recomputing
+  await BoosterSettings.findOneAndUpdate({ guildId }, { 'rotation.nextRotationAt': nextTime }).catch(() => {});
+
   const timer = setTimeout(async () => {
     await runRotationForGuild(guildId);
     _scheduleGuild(guildId);
   }, ms);
 
   _timers.set(guildId, timer);
-  log('info', 'RotationService', `Scheduled rotation for guild ${guildId} in ${Math.round(ms / 60000)}min`);
+  log('info', 'RotationService', `Scheduled rotation for guild ${guildId} in ${Math.round(ms / 60000)}min (next: ${nextTime.toISOString()})`);
 }
 
 function _freqToMs(freq, customMinutes) {
@@ -141,7 +182,7 @@ export async function runRotationForGuild(guildId) {
 
     log('info', 'RotationService', `[${mode}] Rotated "${movedEntry.doc.name}" in guild ${guildId}`);
 
-    // Record timestamp so .role list can show accurate next-rotation ETA
+    // Record lastRunAt so settings history is accurate
     await BoosterSettings.findOneAndUpdate({ guildId }, { 'rotation.lastRunAt': new Date() }).catch(() => {});
 
     // ── Send log message ────────────────────────────────────────────────────

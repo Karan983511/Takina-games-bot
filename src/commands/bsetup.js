@@ -16,7 +16,7 @@ import BoosterSettings from '../booster/models/BoosterSettings.js';
 import BoosterRole from '../booster/models/BoosterRole.js';
 import { isAdmin } from '../booster/utils/validators.js';
 import { linkExistingRole, unlinkRole } from '../booster/services/roleService.js';
-import { runRotationForGuild } from '../booster/services/rotationService.js';
+import { runRotationForGuild, rescheduleGuild } from '../booster/services/rotationService.js';
 
 async function getSettings(guildId) {
   return BoosterSettings.findOneAndUpdate(
@@ -177,7 +177,10 @@ async function buildRotation(settings) {
       `**Status:** ${tick(r.enabled)} ${label(r.enabled)}\n` +
       `**Mode:** ${mode === 'random' ? '🎲 Random — a random role is moved to the top each cycle' : '🔁 Sequential — top role cycles to the bottom each cycle'}\n` +
       `**Frequency:** ${r.enabled ? freq(r.frequency) : '—'}` +
-      (r.frequency === 'custom' && r.enabled ? `\n**Interval:** ${r.customIntervalMinutes} minutes` : '')
+      (r.frequency === 'custom' && r.enabled ? `\n**Interval:** ${r.customIntervalMinutes} minutes` : '') +
+      (['daily','weekly','monthly'].includes(r.frequency) && r.enabled
+        ? `\n**Scheduled:** ${String(r.scheduledHour ?? 0).padStart(2,'0')}:${String(r.scheduledMinute ?? 0).padStart(2,'0')} — ${r.timezone ?? 'UTC'}`
+        : '')
     );
 
   const row1 = new ActionRowBuilder().addComponents(
@@ -203,7 +206,13 @@ async function buildRotation(settings) {
       ),
   );
 
-  return { embeds: [embed], components: r.enabled ? [row1, row2] : [row1] };
+  const showTimePicker = r.enabled && ['daily','weekly','monthly'].includes(r.frequency);
+  const row3 = showTimePicker ? new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('bsetup_rotation_time_open')
+      .setLabel('🕐 Set Time & Timezone').setStyle(ButtonStyle.Secondary),
+  ) : null;
+  const rows = r.enabled ? [row1, row2, ...(row3 ? [row3] : [])] : [row1];
+  return { embeds: [embed], components: rows };
 }
 
 async function buildLogging(settings, guild) {
@@ -694,6 +703,59 @@ export async function handleComponent(interaction, client) {
         embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Rotation failed: ${err.message}`)],
       });
     }
+  }
+
+  // ── Rotation time modal ────────────────────────────────────────────────────
+  if (id === 'bsetup_rotation_time_open') {
+    const settings = await getSettings(guildId);
+    const r        = settings.rotation;
+    const curTime  = `${String(r.scheduledHour ?? 0).padStart(2,'0')}:${String(r.scheduledMinute ?? 0).padStart(2,'0')}`;
+    const curTz    = r.timezone ?? 'UTC';
+    return interaction.showModal(
+      new ModalBuilder().setCustomId('bsetup_rotation_time_modal').setTitle('🕐 Rotation Time')
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('rot_time').setLabel('Time (HH:MM, 24-hour)')
+              .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(5)
+              .setPlaceholder('05:00').setValue(curTime)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('rot_tz').setLabel('Timezone — IANA format')
+              .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(50)
+              .setPlaceholder('Asia/Kolkata').setValue(curTz)
+          ),
+        )
+    );
+  }
+
+  if (id === 'bsetup_rotation_time_modal') {
+    const timeStr  = interaction.fields.getTextInputValue('rot_time').trim();
+    const tzStr    = interaction.fields.getTextInputValue('rot_tz').trim();
+    const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (!timeMatch) {
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ Invalid format. Use **HH:MM** — e.g. `05:00`')], flags: MessageFlags.Ephemeral });
+    }
+    const hour = parseInt(timeMatch[1], 10);
+    const min  = parseInt(timeMatch[2], 10);
+    if (hour > 23 || min > 59) {
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ Hour must be 0–23, minute 0–59.')], flags: MessageFlags.Ephemeral });
+    }
+    try { new Intl.DateTimeFormat('en', { timeZone: tzStr }).format(); } catch {
+      return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Unknown timezone \`${tzStr}\`.
+Examples: \`Asia/Kolkata\`, \`UTC\`, \`America/New_York\`, \`Europe/London\``)], flags: MessageFlags.Ephemeral });
+    }
+    await BoosterSettings.findOneAndUpdate({ guildId }, {
+      'rotation.scheduledHour':   hour,
+      'rotation.scheduledMinute': min,
+      'rotation.timezone':        tzStr,
+    });
+    await rescheduleGuild(guildId);
+    const settings = await getSettings(guildId);
+    const payload  = await getSectionPayload('rotation', settings, interaction.guild);
+    const hh = String(hour).padStart(2,'0');
+    const mm = String(min).padStart(2,'0');
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Rotation will fire every **${settings.rotation.frequency}** at **${hh}:${mm} ${tzStr}**.`)], flags: MessageFlags.Ephemeral });
+    return interaction.message.edit(payload);
   }
 
   if (id === 'bsetup_reset_open') {

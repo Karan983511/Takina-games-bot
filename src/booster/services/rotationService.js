@@ -141,6 +141,9 @@ export async function runRotationForGuild(guildId) {
 
     log('info', 'RotationService', `[${mode}] Rotated "${movedEntry.doc.name}" in guild ${guildId}`);
 
+    // Record timestamp so .role list can show accurate next-rotation ETA
+    await BoosterSettings.findOneAndUpdate({ guildId }, { 'rotation.lastRunAt': new Date() }).catch(() => {});
+
     // ── Send log message ────────────────────────────────────────────────────
     if (settings?.logChannelId) {
       const ch = guild.channels.cache.get(settings.logChannelId);

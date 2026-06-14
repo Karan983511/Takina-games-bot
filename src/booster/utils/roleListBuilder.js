@@ -42,8 +42,11 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
 
     let sharedBit = '';
     if (r.manuallyLinked && discordRole) {
-      // Linked roles: sharedWith is not populated — count real Discord members instead
-      const extras = discordMemberCount(r.roleId) - 1; // subtract the owner
+      // Linked roles: sharedWith is not populated — count real Discord members instead.
+      // Only subtract 1 for the owner if they actually hold the role in Discord.
+      const ownerHasRole = guild.members.cache.get(r.userId)?.roles.cache.has(r.roleId) ?? false;
+      const total  = discordMemberCount(r.roleId);
+      const extras = ownerHasRole ? total - 1 : total;
       if (extras > 0) sharedBit = ` *(+${extras})*`;
     } else {
       sharedBit = r.sharedWith?.length ? ` *(+${r.sharedWith.length})*` : '';

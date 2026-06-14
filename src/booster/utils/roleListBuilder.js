@@ -3,17 +3,6 @@ import BoosterRole from '../models/BoosterRole.js';
 
 const PAGE_SIZE = 10;
 
-function freqToMs(freq, customMinutes) {
-  switch (freq) {
-    case 'hourly':  return 60 * 60 * 1000;
-    case 'daily':   return 24 * 60 * 60 * 1000;
-    case 'weekly':  return 7 * 24 * 60 * 60 * 1000;
-    case 'monthly': return 30 * 24 * 60 * 60 * 1000;
-    case 'custom':  return Math.max(30, customMinutes ?? 1440) * 60 * 1000;
-    default:        return 24 * 60 * 60 * 1000;
-  }
-}
-
 function freqLabel(freq, customMinutes) {
   switch (freq) {
     case 'hourly':  return 'Every hour';
@@ -35,41 +24,54 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
 
   // Build role lines
   const lines = slice.map((r, i) => {
-    const num        = safePage * PAGE_SIZE + i + 1;
+    const num         = safePage * PAGE_SIZE + i + 1;
     const discordRole = guild.roles.cache.get(r.roleId);
-    const roleRef    = discordRole ? `<@&${r.roleId}>` : `\`${r.name}\` *(role missing)*`;
-    const owner      = `<@${r.userId}>`;
+    const roleRef     = discordRole ? `<@&${r.roleId}>` : `\`${r.name}\` *(missing)*`;
+    const owner       = `<@${r.userId}>`;
     let iconBit = '';
     if ((r.iconType === 'emoji' || r.iconType === 'custom') && r.icon) iconBit = ` ${r.icon}`;
     else if (r.iconType === 'image') iconBit = ' 📷';
-    const colorBit = r.color ? ` \`${r.color}\`` : '';
-    return `**${num}.** ${roleRef}${iconBit}${colorBit} — ${owner}`;
+    const colorBit  = r.color ? ` \`${r.color}\`` : '';
+    const sharedBit = r.sharedWith?.length ? ` *(+${r.sharedWith.length})*` : '';
+    return `\`${String(num).padStart(2, ' ')}\` ${roleRef}${iconBit}${colorBit} — ${owner}${sharedBit}`;
   });
 
-  // Next rotation timestamp — read from DB (set by rotationService when scheduling)
-  let rotationLine;
-  if (!settings?.rotation?.enabled) {
-    rotationLine = '🔄 Rotation **disabled**';
+  // Rotation info field
+  let rotationValue;
+  const rot = settings?.rotation;
+  if (!rot?.enabled) {
+    rotationValue = '🔴 Disabled';
   } else {
-    const label  = freqLabel(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
-    const next   = settings.rotation.nextRotationAt;
-    const tzHint = settings.rotation.timezone && settings.rotation.timezone !== 'UTC'
-      ? ` (${settings.rotation.timezone})`
+    const label = freqLabel(rot.frequency, rot.customIntervalMinutes);
+    const isClockBased = ['daily', 'weekly', 'monthly'].includes(rot.frequency);
+    const scheduledStr = isClockBased
+      ? ` at **${String(rot.scheduledHour ?? 0).padStart(2, '0')}:${String(rot.scheduledMinute ?? 0).padStart(2, '0')}** (${rot.timezone ?? 'UTC'})`
       : '';
-    if (next) {
-      const nextTs = Math.floor(new Date(next).getTime() / 1000);
-      rotationLine = `🔄 **${label}** — next <t:${nextTs}:R> (<t:${nextTs}:t>)${tzHint}`;
-    } else {
-      rotationLine = `🔄 **${label}** — next rotation scheduled on bot restart${tzHint}`;
-    }
+    const next = rot.nextRotationAt;
+    const etaStr = next
+      ? `\n⏰ Next <t:${Math.floor(new Date(next).getTime() / 1000)}:R> · <t:${Math.floor(new Date(next).getTime() / 1000)}:t>`
+      : '\n⏰ Schedules on next bot restart';
+    rotationValue = `🟢 **${label}**${scheduledStr}${etaStr}`;
   }
+
+  // Stats
+  const totalMembers = roles.reduce((sum, r) => sum + 1 + (r.sharedWith?.length ?? 0), 0);
+  const pageInfo = totalPages > 1 ? ` · Page ${safePage + 1}/${totalPages}` : '';
+
+  const header =
+    `**${roles.length}** active role${roles.length !== 1 ? 's' : ''}` +
+    ` · **${totalMembers}** member${totalMembers !== 1 ? 's' : ''} wearing them${pageInfo}`;
 
   const embed = new EmbedBuilder()
     .setColor(0xF47FFF)
     .setTitle(`🎨 Custom Roles — ${guild.name}`)
-    .setDescription(lines.length ? lines.join('\n') : '*No active custom roles yet.*')
-    .addFields({ name: '\u200b', value: rotationLine })
-    .setFooter({ text: `Page ${safePage + 1}/${totalPages} • ${roles.length} active role${roles.length !== 1 ? 's' : ''}` })
+    .setThumbnail(guild.iconURL({ dynamic: true, size: 128 }) ?? null)
+    .setDescription(
+      header + '\n' +
+      '─'.repeat(32) + '\n' +
+      (lines.length ? lines.join('\n') : '*No active custom roles yet.*')
+    )
+    .addFields({ name: '🔄 Rotation', value: rotationValue })
     .setTimestamp();
 
   const components = [];

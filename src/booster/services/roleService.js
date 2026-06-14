@@ -181,14 +181,15 @@ export async function handleBoostLost(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
   if (!doc) return null;
 
-  if (doc.manuallyLinked) {
-    log('info', 'RoleService', `Boost lost for ${userId} but role is manually linked — skipping auto-delete`);
-    return null;
-  }
-
   const discordRole = guild.roles.cache.get(doc.roleId);
   if (discordRole) {
-    for (const memberId of [...doc.sharedWith, userId]) {
+    // For linked roles sharedWith may be incomplete — pull all current holders from
+    // Discord cache so nobody keeps the role after the booster's grace period ends.
+    const memberIds = doc.manuallyLinked
+      ? guild.members.cache.filter(m => m.roles.cache.has(doc.roleId)).map(m => m.id)
+      : [...doc.sharedWith, userId];
+
+    for (const memberId of memberIds) {
       const m = guild.members.cache.get(memberId)
              ?? await guild.members.fetch(memberId).catch(() => null);
       if (m) await m.roles.remove(discordRole).catch(() => {});
@@ -201,7 +202,7 @@ export async function handleBoostLost(guild, userId) {
   doc.roleId        = null;
   await doc.save();
 
-  log('info', 'RoleService', `Boost lost — deleted Discord role for ${userId}, DB data preserved`);
+  log('info', 'RoleService', `Boost lost — deleted Discord role for ${userId} (linked: ${doc.manuallyLinked}), DB data preserved`);
   return doc;
 }
 

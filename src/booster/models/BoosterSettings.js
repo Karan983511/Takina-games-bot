@@ -23,6 +23,10 @@ const schema = new mongoose.Schema({
     frequency:             { type: String, enum: ['hourly', 'daily', 'weekly', 'monthly', 'custom'], default: 'daily' },
     customIntervalMinutes: { type: Number, default: 1440 },
     lastRunAt:             { type: Date, default: null },
+    scheduledHour:         { type: Number, default: 0, min: 0, max: 23 },
+    scheduledMinute:       { type: Number, default: 0, min: 0, max: 59 },
+    timezone:              { type: String, default: 'UTC' },
+    nextRotationAt:        { type: Date, default: null },
   },
 
   retention: {

@@ -19,7 +19,7 @@ async function tryDm(user, content) {
 // ─── Grace period: mark boostLostAt, DM the user, schedule deletion ───────────
 async function startGracePeriod(guild, userId, user, graceDays, client) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
-  if (!doc || doc.manuallyLinked) return;
+  if (!doc) return;
 
   doc.boostLostAt = new Date();
   await doc.save();

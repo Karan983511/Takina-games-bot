@@ -46,17 +46,22 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
     return `**${num}.** ${roleRef}${iconBit}${colorBit} — ${owner}`;
   });
 
-  // Next rotation timestamp
+  // Next rotation timestamp — read from DB (set by rotationService when scheduling)
   let rotationLine;
   if (!settings?.rotation?.enabled) {
     rotationLine = '🔄 Rotation **disabled**';
   } else {
-    const ms   = freqToMs(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
-    const base = settings.rotation.lastRunAt
-      ? new Date(settings.rotation.lastRunAt).getTime()
-      : new Date(settings.updatedAt ?? settings.createdAt).getTime();
-    const nextTs = Math.floor((base + ms) / 1000);
-    rotationLine = `🔄 **${freqLabel(settings.rotation.frequency, settings.rotation.customIntervalMinutes)}** — next <t:${nextTs}:R> (<t:${nextTs}:t>)`;
+    const label  = freqLabel(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
+    const next   = settings.rotation.nextRotationAt;
+    const tzHint = settings.rotation.timezone && settings.rotation.timezone !== 'UTC'
+      ? ` (${settings.rotation.timezone})`
+      : '';
+    if (next) {
+      const nextTs = Math.floor(new Date(next).getTime() / 1000);
+      rotationLine = `🔄 **${label}** — next <t:${nextTs}:R> (<t:${nextTs}:t>)${tzHint}`;
+    } else {
+      rotationLine = `🔄 **${label}** — next rotation scheduled on bot restart${tzHint}`;
+    }
   }
 
   const embed = new EmbedBuilder()

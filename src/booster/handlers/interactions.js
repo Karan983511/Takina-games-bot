@@ -1,6 +1,8 @@
 import {
   ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, MessageFlags,
 } from 'discord.js';
+import BoosterSettings from '../models/BoosterSettings.js';
+import { buildRoleListPayload } from '../utils/roleListBuilder.js';
 import BoosterRole from '../models/BoosterRole.js';
 import { createBoosterRole, restoreRole } from '../services/roleService.js';
 import { createBoosterVC, restoreVC }     from '../services/vcService.js';
@@ -155,5 +157,13 @@ export async function handleBoosterInteraction(interaction, client) {
       await audit(client, interaction.guild.id, interaction.user.id, 'VC_CREATED', { name, channelId: channel.id });
       return interaction.editReply({ embeds: [successEmbed(`Your VC ${channel} has been created!`)] });
     } catch (err) { return interaction.editReply({ embeds: [errorEmbed(`Failed: ${err.message}`)] }); }
+  }
+
+  // ── .role list pagination ─────────────────────────────────────────────────
+  if (id.startsWith('rolelist_p_')) {
+    const page     = parseInt(id.replace('rolelist_p_', ''), 10);
+    const settings = await BoosterSettings.findOne({ guildId: interaction.guild.id }).lean();
+    const payload  = await buildRoleListPayload(interaction.guild, settings, page);
+    return interaction.update(payload);
   }
 }

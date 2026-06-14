@@ -15,8 +15,14 @@ function freqLabel(freq, customMinutes) {
 }
 
 export async function buildRoleListPayload(guild, settings, page = 0) {
-  const roles = await BoosterRole.find({ guildId: guild.id, active: true })
-    .sort({ createdAt: 1 }).lean();
+  const roles = await BoosterRole.find({ guildId: guild.id, active: true }).lean();
+
+  // Sort by actual Discord role position (top of role list = highest position number = shown first)
+  roles.sort((a, b) => {
+    const posA = guild.roles.cache.get(a.roleId)?.position ?? -1;
+    const posB = guild.roles.cache.get(b.roleId)?.position ?? -1;
+    return posB - posA; // descending: highest position (top of list) first
+  });
 
   const totalPages = Math.max(1, Math.ceil(roles.length / PAGE_SIZE));
   const safePage   = Math.min(Math.max(0, page), totalPages - 1);

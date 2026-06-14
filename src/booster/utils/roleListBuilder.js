@@ -22,13 +22,27 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
   const safePage   = Math.min(Math.max(0, page), totalPages - 1);
   const slice      = roles.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
+  // Helper: count members who actually have a role in Discord cache
+  function discordMemberCount(roleId) {
+    return guild.members.cache.filter(m => m.roles.cache.has(roleId)).size;
+  }
+
   // Build role lines — role mention + owner only
   const lines = slice.map((r, i) => {
     const num         = safePage * PAGE_SIZE + i + 1;
     const discordRole = guild.roles.cache.get(r.roleId);
     const roleRef     = discordRole ? `<@&${r.roleId}>` : `\`${r.name}\` *(missing)*`;
     const owner       = `<@${r.userId}>`;
-    const sharedBit   = r.sharedWith?.length ? ` *(+${r.sharedWith.length})*` : '';
+
+    let sharedBit = '';
+    if (r.manuallyLinked && discordRole) {
+      // Linked roles: sharedWith is not populated — count real Discord members instead
+      const extras = discordMemberCount(r.roleId) - 1; // subtract the owner
+      if (extras > 0) sharedBit = ` *(+${extras})*`;
+    } else {
+      sharedBit = r.sharedWith?.length ? ` *(+${r.sharedWith.length})*` : '';
+    }
+
     return `\`${String(num).padStart(2, ' ')}\` ${roleRef} — ${owner}${sharedBit}`;
   });
 
@@ -47,8 +61,14 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
     }
   }
 
-  // Stats
-  const totalMembers = roles.reduce((sum, r) => sum + 1 + (r.sharedWith?.length ?? 0), 0);
+  // Stats — for linked roles use Discord cache count; for bot-managed use sharedWith
+  const totalMembers = roles.reduce((sum, r) => {
+    if (r.manuallyLinked && r.roleId) {
+      const discordRole = guild.roles.cache.get(r.roleId);
+      if (discordRole) return sum + discordMemberCount(r.roleId);
+    }
+    return sum + 1 + (r.sharedWith?.length ?? 0);
+  }, 0);
   const pageInfo = totalPages > 1 ? ` · Page ${safePage + 1}/${totalPages}` : '';
 
   const header =

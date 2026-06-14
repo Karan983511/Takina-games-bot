@@ -204,7 +204,7 @@ export async function runRotationForGuild(guildId) {
           return `${i + 1}. <@&${discordRole.id}> — <@${doc.userId}>${arrow}`;
         });
 
-        const nextMs   = _freqToMs(settings.rotation.frequency, settings.rotation.customIntervalMinutes);
+        const nextMs   = _getNextMs(settings);
         const nextTime = Math.floor((Date.now() + nextMs) / 1000);
 
         const embed = new EmbedBuilder()

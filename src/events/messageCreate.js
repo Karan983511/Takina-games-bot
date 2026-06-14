@@ -48,7 +48,7 @@ export default {
                 value: [
                   '`.role setup` — Create or edit your custom booster role',
                   '`.role info` — View your role\'s name, color, icon & sharing',
-                  '`.role list` — See all active custom roles & next rotation time',
+                  '`.role overview` — See all active custom roles & next rotation time',
                   '`.role give @user` — Share your role with another member',
                   '`.role remove @user` — Remove a member from your role',
                   '`.role removeme` — Remove yourself from a role shared with you',
@@ -285,7 +285,7 @@ export default {
       }
 
       // .role list
-      if (sub === 'list') {
+      if (sub === 'overview') {
         const settings = await BoosterSettings.findOne({ guildId: guild.id }).lean();
         const payload  = await buildRoleListPayload(guild, settings, 0);
         return message.channel.send(payload);
@@ -303,7 +303,7 @@ export default {
               { name: '`.role removeme`',     value: 'Remove yourself from a role that was shared with you' },
               { name: '`.role reset`',        value: 'Reset your role back to default name/color/icon (keeps the role, just wipes settings)' },
               { name: '`.role delete`',       value: 'Permanently delete your custom role' },
-              { name: '`.role list`',         value: 'See all active custom roles in the server & when the next rotation fires' },
+              { name: '`.role overview`',         value: 'See all active custom roles in the server & when the next rotation fires' },
             )
             .setFooter({ text: 'Type .help for the full command list.' })],
         });

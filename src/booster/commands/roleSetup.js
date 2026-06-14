@@ -141,7 +141,7 @@ function buildSetupEmbed(session) {
   else if (color1)      colorDisplay = color1;
 
   let iconDisplay = '*Not set*';
-  if (session.iconTempEmojiId)       iconDisplay = '📷 Image ready to apply';
+  if (session.iconTempEmojiId)       iconDisplay = `<:tmpricon:${session.iconTempEmojiId}>`;
   else if (session.iconType === 'emoji')  iconDisplay = session.iconValue;
   else if (session.iconType === 'custom' && !session.iconTempEmojiId) iconDisplay = session.iconValue;
   else if (session.iconType === 'image')  iconDisplay = '📷 Image (saved — re-upload to change)';
@@ -230,7 +230,7 @@ function buildPreviewEmbed(session) {
   const color2 = session.color2 ?? null;
   const colorLine = color2 ? `${color1} → ${color2}` : color1;
   let iconLine = 'None';
-  if (session.iconTempEmojiId)            iconLine = '📷 Custom image (ready to apply)';
+  if (session.iconTempEmojiId)            iconLine = `<:tmpricon:${session.iconTempEmojiId}>`;
   else if (session.iconType === 'emoji')  iconLine = session.iconValue;
   else if (session.iconType === 'custom') iconLine = session.iconValue;
   else if (session.iconType === 'image')  iconLine = '📷 Image (Discord-hosted)';

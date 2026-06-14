@@ -22,6 +22,12 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
   const safePage   = Math.min(Math.max(0, page), totalPages - 1);
   const slice      = roles.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
+  // If any linked roles exist, ensure the member cache is populated so we get accurate counts
+  const hasLinkedRoles = slice.some(r => r.manuallyLinked && r.roleId);
+  if (hasLinkedRoles) {
+    await guild.members.fetch().catch(() => {});
+  }
+
   // Helper: count members who actually have a role in Discord cache
   function discordMemberCount(roleId) {
     return guild.members.cache.filter(m => m.roles.cache.has(roleId)).size;
@@ -61,7 +67,7 @@ export async function buildRoleListPayload(guild, settings, page = 0) {
     }
   }
 
-  // Stats — for linked roles use Discord cache count; for bot-managed use sharedWith
+  // Stats — for linked roles use Discord cache count (after fetch); for bot-managed use sharedWith
   const totalMembers = roles.reduce((sum, r) => {
     if (r.manuallyLinked && r.roleId) {
       const discordRole = guild.roles.cache.get(r.roleId);

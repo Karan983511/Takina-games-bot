@@ -110,8 +110,13 @@ export default {
         if (role.colorSecondary) colorDisplay += ` → ${role.colorSecondary}`;
 
         let iconDisplay = 'None';
+        let iconThumbnail = null;
         if (role.iconType === 'emoji' || role.iconType === 'custom') iconDisplay = role.icon ?? 'None';
-        else if (role.iconType === 'image') iconDisplay = '📷 Custom image';
+        else if (role.iconType === 'image') {
+          const iconUrl = discordRole?.iconURL({ size: 128 }) ?? null;
+          iconDisplay   = iconUrl ? '📷 Custom image' : '📷 Custom image (role missing)';
+          iconThumbnail = iconUrl;
+        }
 
         let sharedDisplay = 'Nobody';
         if (role.sharedWith?.length) {
@@ -131,6 +136,7 @@ export default {
             new EmbedBuilder()
               .setColor(embedColor)
               .setTitle(`🎨 ${role.name}`)
+              .setThumbnail(iconThumbnail)
               .addFields(
                 { name: '🎨 Color',       value: colorDisplay,  inline: true  },
                 { name: '🖼️ Icon',        value: iconDisplay,   inline: true  },

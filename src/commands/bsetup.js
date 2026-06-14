@@ -16,6 +16,7 @@ import BoosterSettings from '../booster/models/BoosterSettings.js';
 import BoosterRole from '../booster/models/BoosterRole.js';
 import { isAdmin } from '../booster/utils/validators.js';
 import { linkExistingRole, unlinkRole } from '../booster/services/roleService.js';
+import { runRotationForGuild } from '../booster/services/rotationService.js';
 
 async function getSettings(guildId) {
   return BoosterSettings.findOneAndUpdate(
@@ -315,6 +316,7 @@ async function buildSystem(guildId, guild) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('bsetup_stats').setLabel('↻ Refresh').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('bsetup_test_dm').setLabel('📨 Test DMs').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('bsetup_force_rotate').setLabel('🔁 Force Rotate').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('bsetup_reset_open').setLabel('Reset All Settings').setStyle(ButtonStyle.Danger),
   );
 
@@ -670,6 +672,27 @@ export async function handleComponent(interaction, client) {
       return interaction.reply({ content: '✅ Both DMs sent! Check your DMs.', flags: MessageFlags.Ephemeral });
     } catch {
       return interaction.reply({ content: '❌ Could not send DMs — make sure your DMs are open.', flags: MessageFlags.Ephemeral });
+    }
+  }
+
+  if (id === 'bsetup_force_rotate') {
+    const settings = await getSettings(guildId);
+    if (!settings?.rotation?.enabled) {
+      return interaction.reply({
+        embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription('⚠️ Rotation is **disabled**. Enable it in the Rotation section first.')],
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      await runRotationForGuild(guildId);
+      return interaction.editReply({
+        embeds: [new EmbedBuilder().setColor(0x57F287).setDescription('✅ Rotation ran successfully! Check the log channel for the new order.')],
+      });
+    } catch (err) {
+      return interaction.editReply({
+        embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Rotation failed: ${err.message}`)],
+      });
     }
   }
 

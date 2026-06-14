@@ -22,6 +22,7 @@ const schema = new mongoose.Schema({
     mode:                  { type: String, enum: ['sequential', 'random'], default: 'sequential' },
     frequency:             { type: String, enum: ['hourly', 'daily', 'weekly', 'monthly', 'custom'], default: 'daily' },
     customIntervalMinutes: { type: Number, default: 1440 },
+    lastRunAt:             { type: Date, default: null },
   },
 
   retention: {

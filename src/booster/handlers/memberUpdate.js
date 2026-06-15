@@ -17,6 +17,31 @@ async function tryDm(user, content) {
   try { await user.send(content); } catch { /* DMs closed */ }
 }
 
+async function sendRetentionNotice(userLike, guild, doc, settings, actionLabel) {
+  const retentionDays = settings.retention?.days ?? 7;
+  const actionText = actionLabel ?? 'left the server';
+  const user = userLike?.send ? userLike : userLike?.user;
+  if (!user?.send) return;
+
+  const expiresText = retentionDays === 1 ? '1 day' : `${retentionDays} days`;
+
+  await tryDm(user, {
+    embeds: [new EmbedBuilder()
+      .setColor(0xF47FFF)
+      .setTitle('🎖️ Custom role saved')
+      .setDescription(
+        `You **${actionText}** **${guild.name}**.
+
+` +
+        `Your custom role **${doc.name}** has been removed from Discord, but the record is being kept for **${expiresText}**.
+` +
+        `If you come back and boost again before it expires, your role can be **automatically restored**.`
+      )
+      .setFooter({ text: 'Rejoin + boost to restore your role' })
+      .setTimestamp()],
+  });
+}
+
 // ─── Grace period: mark boostLostAt, DM the user, schedule deletion ───────────
 async function startGracePeriod(guild, userId, user, graceDays, client) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
@@ -167,22 +192,55 @@ export async function handleEligibilityLost(member) {
   }).catch(() => {});
 }
 
-export async function handleMemberLeave(member) {
+export async function handleMemberLeave(member, context = {}) {
   const { guild, id: userId } = member;
   try {
     const doc = await BoosterRole.findOne({ guildId: guild.id, userId });
     if (!doc) return;
-    log('info', 'MemberUpdate', `Member ${userId} left — preserving role data`);
-    if (doc.active) {
-      await handleBoostLost(guild, userId).catch(() => {});
-      await BoosterRole.updateOne(
-        { guildId: guild.id, userId },
-        { $set: { leftGuildAt: new Date() } },
-      );
-    } else {
-      doc.leftGuildAt = new Date();
-      await doc.save();
+
+    const settings = await getSettings(guild.id);
+    const actionLabel =
+      context.source === 'ban' ? 'was banned from the server' :
+      context.source === 'kick' ? 'was kicked from the server' :
+      'left the server';
+
+    // Leave / kick / ban should always fully remove the Discord role immediately.
+    if (doc.roleId) {
+      const discordRole = guild.roles.cache.get(doc.roleId)
+        ?? await guild.roles.fetch(doc.roleId).catch(() => null);
+
+      if (discordRole) {
+        const memberIds = new Set([
+          ...doc.sharedWith,
+          userId,
+          ...guild.members.cache.filter(m => m.roles.cache.has(doc.roleId)).map(m => m.id),
+        ]);
+
+        for (const memberId of memberIds) {
+          const m = guild.members.cache.get(memberId)
+            ?? await guild.members.fetch(memberId).catch(() => null);
+          if (m) await m.roles.remove(discordRole).catch(() => {});
+        }
+
+        await discordRole.delete('Booster role cleanup after member left/kicked/banned').catch(() => {});
+      }
     }
+
+    doc.active = false;
+    doc.roleId = null;
+    doc.softDeletedAt = new Date();
+    doc.leftGuildAt = new Date();
+    doc.boostLostAt = null;
+    await doc.save();
+
+    await sendRetentionNotice(member.user ?? member, guild, doc, settings, actionLabel).catch(() => {});
+
+    const ch = settings.logChannelId ? guild.channels.cache.get(settings.logChannelId) : null;
+    ch?.send({
+      content: `🧹 <@${userId}> ${actionLabel} — custom role removed, data kept for **${settings.retention?.days ?? 7} days**.`,
+    }).catch(() => {});
+
+    log('info', 'MemberUpdate', `Member ${userId} left — custom role removed and record disabled`);
   } catch (err) {
     log('error', 'MemberUpdate', `handleMemberLeave error for ${userId}: ${err.message}`);
   }

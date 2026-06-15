@@ -1,3 +1,4 @@
+import { EmbedBuilder } from 'discord.js';
 import BoosterRole from '../models/BoosterRole.js';
 import BoosterSettings from '../models/BoosterSettings.js';
 import { log } from '../utils/logger.js';
@@ -133,10 +134,12 @@ export async function runGraceExpirySweep(client) {
               try {
                 const user = member?.user ?? await client.users.fetch(doc.userId).catch(() => null);
                 if (user) {
-                  await user.send(
-                    `\ud83d\uddd1\ufe0f Your grace period on **${guild.name}** has ended. Your custom role **${doc.name}** has been removed.\n` +
-                    `Your settings are saved for **${retDays} days** — if you boost again within that time, your role will be **automatically restored**.`
-                  ).catch(() => {});
+                  await user.send({ embeds: [new EmbedBuilder()
+                    .setColor(0xED4245)
+                    .setTitle('🗑️ Grace Period Ended')
+                    .setDescription(`Your grace period on **${guild.name}** has ended.\nYour custom role **${doc.name}** has been removed.`)
+                    .addFields({ name: 'Want it back?', value: `Your settings are saved for **${retDays} days** — if you boost again within that time, your role will be **automatically restored**.` })
+                    .setTimestamp()] }).catch(() => {});
                 }
               } catch { /* DMs closed */ }
             }
@@ -172,10 +175,13 @@ export async function runGraceExpirySweep(client) {
                 try {
                   const user = freshMember?.user ?? await client.users.fetch(userId).catch(() => null);
                   if (user) {
-                    await user.send(
-                      `\ud83d\uddd1\ufe0f Your grace period on **${guild.name}** has ended. Your custom role **${docName}** has been removed.\n` +
-                      `Your settings are saved for **${latestSettings?.retention?.days ?? 7} days** — if you boost again within that time, your role will be **automatically restored**.`
-                    ).catch(() => {});
+                    const sweepRetDays = latestSettings?.retention?.days ?? 7;
+                    await user.send({ embeds: [new EmbedBuilder()
+                      .setColor(0xED4245)
+                      .setTitle('🗑️ Grace Period Ended')
+                      .setDescription(`Your grace period on **${guild.name}** has ended.\nYour custom role **${docName}** has been removed.`)
+                      .addFields({ name: 'Want it back?', value: `Your settings are saved for **${sweepRetDays} days** — if you boost again within that time, your role will be **automatically restored**.` })
+                      .setTimestamp()] }).catch(() => {});
                   }
                 } catch { /* DMs closed */ }
               }

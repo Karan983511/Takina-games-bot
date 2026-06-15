@@ -1,3 +1,4 @@
+import { EmbedBuilder } from 'discord.js';
 import { handleBoostLost, restoreRole } from '../services/roleService.js';
 import { log } from '../utils/logger.js';
 import BoosterRole from '../models/BoosterRole.js';
@@ -28,15 +29,20 @@ async function startGracePeriod(guild, userId, user, graceDays, client) {
   // DM the user if enabled
   const settings = await getSettings(guild.id);
   const dmsEnabled = settings.features?.gracePeriodDms ?? true;
+  const retDays   = settings.retention?.days ?? 7;
   if (dmsEnabled) {
-    const deadline = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000);
+    const deadline    = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000);
     const deadlineStr = deadline.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    await tryDm(user,
-      `💔 **You've stopped boosting ${guild.name}.**\n\n` +
-      `Your custom role **${doc.name}** is still active and will be kept for **${graceDays} day${graceDays !== 1 ? 's' : ''}** ` +
-      `(until **${deadlineStr}**). If you boost again before then, nothing will change.\n\n` +
-      `After ${deadlineStr}, your role will be automatically removed. If you boost again within 7 days after that, your role will be **automatically restored**.`
-    );
+    await tryDm(user, { embeds: [new EmbedBuilder()
+      .setColor(0xF47FFF)
+      .setTitle('💔 You\'ve stopped boosting')
+      .setDescription(
+        `**${guild.name}** — your boost has ended.\n\n` +
+        `Your custom role **${doc.name}** is still active and will be kept for **${graceDays} day${graceDays !== 1 ? 's' : ''}** (until **${deadlineStr}**).\n` +
+        `If you boost again before then, nothing will change.`
+      )
+      .addFields({ name: 'After grace period', value: `Your role will be automatically removed. If you boost again within **${retDays} days**, it will be **automatically restored**.` })
+      .setTimestamp()] });
   }
 
   // Schedule actual deletion
@@ -55,10 +61,13 @@ async function startGracePeriod(guild, userId, user, graceDays, client) {
       }
       log('info', 'MemberUpdate', `Grace period expired — removed role for ${userId}`);
       if (latestSettings.features?.gracePeriodDms ?? true) {
-        await tryDm(user,
-          `🗑️ Your grace period on **${guild.name}** has ended. Your custom role **${doc.name}** has been removed.\n` +
-          `Your settings are saved for **7 days** — if you boost again within that time, your role will be **automatically restored**.`
-        );
+        const expRetDays = latestSettings.retention?.days ?? 7;
+        await tryDm(user, { embeds: [new EmbedBuilder()
+          .setColor(0xED4245)
+          .setTitle('🗑️ Grace Period Ended')
+          .setDescription(`Your grace period on **${guild.name}** has ended.\nYour custom role **${doc.name}** has been removed.`)
+          .addFields({ name: 'Want it back?', value: `Your settings are saved for **${expRetDays} days** — if you boost again within that time, your role will be **automatically restored**.` })
+          .setTimestamp()] });
       }
       const ch = latestSettings.logChannelId ? guild.channels.cache.get(latestSettings.logChannelId) : null;
       ch?.send({ content: `🗑️ Grace period expired — removed custom role for <@${userId}>.` }).catch(() => {});

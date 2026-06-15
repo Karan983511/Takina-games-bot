@@ -53,6 +53,32 @@ async function applyRoleColors(guild, roleId, primary, secondary = null) {
   return colors;
 }
 
+async function fetchDiscordRole(guild, roleId) {
+  if (!roleId) return null;
+  return guild.roles.cache.get(roleId) ?? await guild.roles.fetch(roleId).catch(() => null);
+}
+
+async function deleteDiscordRoleEverywhere(guild, roleId, doc, reason) {
+  const discordRole = await fetchDiscordRole(guild, roleId);
+  if (!discordRole) return false;
+
+  // Remove the role from everyone we can see before deleting it.
+  const memberIds = new Set([
+    ...doc.sharedWith,
+    doc.userId,
+    ...guild.members.cache.filter(m => m.roles.cache.has(roleId)).map(m => m.id),
+  ]);
+
+  for (const memberId of memberIds) {
+    const member = guild.members.cache.get(memberId)
+      ?? await guild.members.fetch(memberId).catch(() => null);
+    if (member) await member.roles.remove(discordRole).catch(() => {});
+  }
+
+  await discordRole.delete(reason).catch(() => {});
+  return true;
+}
+
 export async function createBoosterRole(guild, userId, { name, color, colorSecondary = null, icon, template }) {
   const position = await getInsertPosition(guild);
   const roleData  = { name, color: color || '#99AAB5', hoist: false, mentionable: false };
@@ -181,21 +207,7 @@ export async function handleBoostLost(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, active: true });
   if (!doc) return null;
 
-  const discordRole = guild.roles.cache.get(doc.roleId);
-  if (discordRole) {
-    // For linked roles sharedWith may be incomplete — pull all current holders from
-    // Discord cache so nobody keeps the role after the booster's grace period ends.
-    const memberIds = doc.manuallyLinked
-      ? guild.members.cache.filter(m => m.roles.cache.has(doc.roleId)).map(m => m.id)
-      : [...doc.sharedWith, userId];
-
-    for (const memberId of memberIds) {
-      const m = guild.members.cache.get(memberId)
-             ?? await guild.members.fetch(memberId).catch(() => null);
-      if (m) await m.roles.remove(discordRole).catch(() => {});
-    }
-    await discordRole.delete('Booster lost boost').catch(() => {});
-  }
+  await deleteDiscordRoleEverywhere(guild, doc.roleId, doc, 'Booster lost boost');
 
   doc.active        = false;
   doc.softDeletedAt = new Date();
@@ -246,17 +258,7 @@ export async function deleteBoosterRole(guild, userId) {
   if (!doc) return null;
 
   if (doc.roleId) {
-    const dr = guild.roles.cache.get(doc.roleId);
-    if (dr) {
-      for (const memberId of [...doc.sharedWith, userId]) {
-        const m = guild.members.cache.get(memberId)
-               ?? await guild.members.fetch(memberId).catch(() => null);
-        if (m) await m.roles.remove(dr).catch(() => {});
-      }
-      if (!doc.manuallyLinked) {
-        await dr.delete('Deleted by owner').catch(() => {});
-      }
-    }
+    await deleteDiscordRoleEverywhere(guild, doc.roleId, doc, 'Deleted by owner');
   }
 
   await BoosterRole.deleteOne({ _id: doc._id });

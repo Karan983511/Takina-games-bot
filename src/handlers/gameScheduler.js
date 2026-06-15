@@ -334,8 +334,10 @@ export class GameScheduler {
     }
 
     if (def.isCorrect(state.game, customId)) {
+      // Acknowledge the interaction immediately — _endGame makes multiple API calls
+      // and Discord's 3-second response window can expire before it finishes.
+      try { await interaction.deferUpdate(); } catch { /* ignore */ }
       await this._endGame(interaction.guild.id, interaction.user);
-      try { await interaction.deferUpdate().catch(() => {}); } catch { /* ignore */ }
       return;
     }
 

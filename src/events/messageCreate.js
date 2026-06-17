@@ -76,6 +76,19 @@ export default {
       const sub     = args[1]?.toLowerCase();
       const { guild, author } = message;
 
+      // Resolve a target member from: @mention, reply, or raw user ID
+      async function resolveTarget() {
+        const mentioned = message.mentions.members.first();
+        if (mentioned) return mentioned;
+        if (message.reference?.messageId) {
+          const ref = await message.fetchReference().catch(() => null);
+          if (ref?.author?.id) return guild.members.fetch(ref.author.id).catch(() => null);
+        }
+        const rawId = args[2]?.replace(/\D/g, '');
+        if (rawId?.length >= 17) return guild.members.fetch(rawId).catch(() => null);
+        return null;
+      }
+
       // .role setup
       if (sub === 'setup' && args.length === 2) {
         const allowed = await canCreateRole(message.member, guild.id);
@@ -122,7 +135,13 @@ export default {
 
         let sharedDisplay = 'Nobody';
         if (role.sharedWith?.length) {
-          sharedDisplay = role.sharedWith.map(id => `<@${id}>`).join(', ');
+          // Fetch usernames and sort A-Z
+          const withNames = await Promise.all(role.sharedWith.map(async id => {
+            const m = guild.members.cache.get(id) ?? await guild.members.fetch(id).catch(() => null);
+            return { id, name: (m?.displayName ?? m?.user?.username ?? id).toLowerCase() };
+          }));
+          withNames.sort((a, b) => a.name.localeCompare(b.name));
+          sharedDisplay = withNames.map(({ id }) => `<@${id}>`).join(', ');
         }
 
         const statusLine = role.active
@@ -183,10 +202,10 @@ export default {
         });
       }
 
-      // .role give @user
+      // .role give @user | .role give <id> | reply + .role give
       if (sub === 'give') {
-        const target = message.mentions.members.first();
-        if (!target) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ Mention a member. Usage: `.role give @user`')] });
+        const target = await resolveTarget();
+        if (!target) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ No member found. Usage: `.role give @user`, `.role give <userID>`, or reply to their message with `.role give`')] });
         if (target.id === author.id) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You can't give your role to yourself.")] });
         const role = await BoosterRole.findOne({ guildId: guild.id, userId: author.id, active: true });
         if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role. Run `.role setup` to create one.")] });
@@ -206,10 +225,10 @@ export default {
         return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Gave your role **${role.name}** to ${target}.`)] });
       }
 
-      // .role remove @user
+      // .role remove @user | .role remove <id> | reply + .role remove
       if (sub === 'remove') {
-        const target = message.mentions.members.first();
-        if (!target) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ Mention a member. Usage: `.role remove @user`')] });
+        const target = await resolveTarget();
+        if (!target) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ No member found. Usage: `.role remove @user`, `.role remove <userID>`, or reply to their message with `.role remove`')] });
         const role = await BoosterRole.findOne({ guildId: guild.id, userId: author.id, active: true });
         if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role.")] });
         if (!role.sharedWith.includes(target.id)) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} doesn't have your role.`)] });

@@ -102,10 +102,26 @@ async function shareRemove(message) {
   return message.channel.send({ embeds: [successEmbed(`Removed ${target.user.username} from your role.`)] });
 }
 
+async function pruneSharedWith(guild, role) {
+  if (!role?.sharedWith?.length) return [];
+  const discordRole = role.roleId ? guild.roles.cache.get(role.roleId) : null;
+  const valid = [];
+  for (const id of role.sharedWith) {
+    const m = guild.members.cache.get(id) ?? await guild.members.fetch(id).catch(() => null);
+    if (m && (!discordRole || m.roles.cache.has(role.roleId))) valid.push(id);
+  }
+  if (valid.length !== role.sharedWith.length) {
+    role.sharedWith = valid;
+    await role.save();
+  }
+  return valid;
+}
+
 async function shareList(message) {
   const role = await BoosterRole.findOne({ guildId: message.guild.id, userId: message.author.id, active: true });
   if (!role) return message.channel.send({ embeds: [errorEmbed('You don\'t have an active custom role.')] });
-  const names = role.sharedWith.length ? role.sharedWith.map(id => `<@${id}>`).join(', ') : 'Nobody added yet.';
+  const valid = await pruneSharedWith(message.guild, role);
+  const names = valid.length ? valid.map(id => `<@${id}>`).join(', ') : 'Nobody added yet.';
   return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('👥 Role Sharing').setDescription(names)] });
 }
 

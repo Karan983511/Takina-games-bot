@@ -20,6 +20,7 @@ async function dashboard(message, client) {
   const role    = await BoosterRole.findOne({ guildId: guild.id, userId: author.id });
   const vc      = await BoosterVC.findOne({ guildId: guild.id, userId: author.id });
   const session = await getActiveSession(guild.id);
+  const validShared = role ? await pruneSharedWith(guild, role) : [];
   const embed = new EmbedBuilder()
     .setColor(role?.color ? parseInt(role.color.replace('#',''), 16) : 0xF47FFF)
     .setTitle(`🎁 ${author.username}'s Booster Dashboard`)
@@ -28,7 +29,7 @@ async function dashboard(message, client) {
       { name: '💎 Boosting', value: isBooster(member) ? '✅ Active Booster' : '❌ Not Boosting', inline: true },
       { name: '🎨 Role',     value: role ? (role.active ? `<@&${role.roleId}> (Active)` : '⏸️ Inactive') : '❌ None', inline: true },
       { name: '🔊 VC',       value: vc   ? (vc.active ? `<#${vc.channelId}> (Active)` : '⏸️ Inactive') : '❌ None', inline: true },
-      { name: '👥 Sharing',  value: role ? `${role.sharedWith.length} member(s)` : '—', inline: true },
+      { name: '👥 Sharing',  value: role ? `${validShared.length} member(s)` : '—', inline: true },
       { name: '🎭 Template', value: role?.template || '—', inline: true },
       { name: '⭐ Featured', value: role?.featured ? '✨ Currently Featured' : '—', inline: true },
       { name: '🗳️ Vote',    value: session ? '✅ Active — use `.booster vote`' : '❌ No active session', inline: false },

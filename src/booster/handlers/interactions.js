@@ -90,7 +90,16 @@ export async function handleBoosterInteraction(interaction, client) {
 
   if (id === 'booster_share_list') {
     const role = await BoosterRole.findOne({ guildId: interaction.guild.id, userId: interaction.user.id, active: true });
-    return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('👥 Sharing').setDescription(role?.sharedWith.length ? role.sharedWith.map(i => `<@${i}>`).join(', ') : 'Nobody added yet.')], flags: MessageFlags.Ephemeral });
+    if (!role) return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('👥 Sharing').setDescription('Nobody added yet.')], flags: MessageFlags.Ephemeral });
+    // Prune members who left or no longer have the role
+    const discordRole = role.roleId ? interaction.guild.roles.cache.get(role.roleId) : null;
+    const valid = [];
+    for (const uid of role.sharedWith) {
+      const m = interaction.guild.members.cache.get(uid) ?? await interaction.guild.members.fetch(uid).catch(() => null);
+      if (m && (!discordRole || m.roles.cache.has(role.roleId))) valid.push(uid);
+    }
+    if (valid.length !== role.sharedWith.length) { role.sharedWith = valid; await role.save(); }
+    return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('👥 Sharing').setDescription(valid.length ? valid.map(i => `<@${i}>`).join(', ') : 'Nobody added yet.')], flags: MessageFlags.Ephemeral });
   }
 
   if (id === 'booster_templates') {

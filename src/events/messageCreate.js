@@ -227,16 +227,25 @@ export default {
 
       // .role remove @user | .role remove <id> | reply + .role remove
       if (sub === 'remove') {
+        // Try to resolve a live guild member first; fall back to raw ID for left members
         const target = await resolveTarget();
-        if (!target) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ No member found. Usage: `.role remove @user`, `.role remove <userID>`, or reply to their message with `.role remove`')] });
+        const rawId  = target?.id ?? args[2]?.replace(/\D/g, '');
+        if (!rawId || rawId.length < 17) {
+          return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ No member found. Usage: `.role remove @user`, `.role remove <userID>`, or reply to their message with `.role remove`')] });
+        }
         const role = await BoosterRole.findOne({ guildId: guild.id, userId: author.id, active: true });
         if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role.")] });
-        if (!role.sharedWith.includes(target.id)) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} doesn't have your role.`)] });
-        role.sharedWith = role.sharedWith.filter(id => id !== target.id);
+        if (!role.sharedWith.includes(rawId)) {
+          return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ <@${rawId}> doesn't have your role.`)] });
+        }
+        role.sharedWith = role.sharedWith.filter(id => id !== rawId);
         await role.save();
-        const dr = guild.roles.cache.get(role.roleId);
-        if (dr) await target.roles.remove(dr).catch(() => {});
-        return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed ${target} from **${role.name}**.`)] });
+        // Only attempt Discord role removal if the member is still in the server
+        if (target) {
+          const dr = guild.roles.cache.get(role.roleId);
+          if (dr) await target.roles.remove(dr).catch(() => {});
+        }
+        return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed <@${rawId}> from **${role.name}**.`)] });
       }
 
       // .role removeme

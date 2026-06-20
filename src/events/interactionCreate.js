@@ -288,6 +288,20 @@ export default {
       return interaction.update({ embeds: [embed], components: rows });
     }
 
+    // ── Booster dashboard + role list pagination ───────────────────────────────
+    if (customId?.startsWith('booster_') || customId?.startsWith('rolelist_p_')) {
+      try {
+        const { handleBoosterInteraction } = await import('../booster/handlers/interactions.js');
+        await handleBoosterInteraction(interaction, client);
+      } catch (err) {
+        console.error('[InteractionCreate] booster interaction error:', err);
+        const reply = { content: '❌ Something went wrong.', flags: MessageFlags.Ephemeral };
+        if (interaction.replied || interaction.deferred) await interaction.followUp(reply).catch(() => {});
+        else await interaction.reply(reply).catch(() => {});
+      }
+      return;
+    }
+
     // ── Game buttons / selects ─────────────────────────────────────────────────
     if ((interaction.isButton() || interaction.isAnySelectMenu()) && customId?.startsWith('tg_')) {
       await client.scheduler.handleInteraction(interaction);

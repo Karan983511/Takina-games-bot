@@ -135,13 +135,23 @@ export default {
 
         let sharedDisplay = 'Nobody';
         if (role.sharedWith?.length) {
-          // Fetch usernames and sort A-Z
-          const withNames = await Promise.all(role.sharedWith.map(async id => {
+          // Resolve members and drop anyone who no longer actually has the Discord role
+          // (e.g. the role was deleted/expired and recreated without re-granting them)
+          const resolved = await Promise.all(role.sharedWith.map(async id => {
             const m = guild.members.cache.get(id) ?? await guild.members.fetch(id).catch(() => null);
-            return { id, name: (m?.displayName ?? m?.user?.username ?? id).toLowerCase() };
+            const stillHasRole = !!m && (!discordRole || m.roles.cache.has(discordRole.id));
+            return { id, m, stillHasRole };
           }));
-          withNames.sort((a, b) => a.name.localeCompare(b.name));
-          sharedDisplay = withNames.map(({ id }) => `<@${id}>`).join(', ');
+          const valid = resolved.filter(r => r.stillHasRole);
+          if (valid.length !== role.sharedWith.length) {
+            role.sharedWith = valid.map(r => r.id);
+            await role.save();
+          }
+          if (valid.length) {
+            const withNames = valid.map(({ id, m }) => ({ id, name: (m?.displayName ?? m?.user?.username ?? id).toLowerCase() }));
+            withNames.sort((a, b) => a.name.localeCompare(b.name));
+            sharedDisplay = withNames.map(({ id }) => `<@${id}>`).join(', ');
+          }
         }
 
         const statusLine = role.active

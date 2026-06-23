@@ -103,6 +103,7 @@ export async function createBoosterRole(guild, userId, { name, color, colorSecon
         manuallyLinked: false,
         softDeletedAt:  null,
         leftGuildAt:    null,
+        sharedWith:     [], // brand-new Discord role — nobody actually has it yet
       },
     },
     { upsert: true, new: true },

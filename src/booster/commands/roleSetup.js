@@ -398,6 +398,7 @@ export async function handleRoleSetupInteraction(interaction, client) {
             iconType: tempEmojiId ? 'image' : (session.iconType ?? 'none'),
             icon:     tempEmojiId ? 'discord_hosted' : (session.iconType === 'image' ? 'discord_hosted' : (session.iconValue ?? null)),
             active: true, softDeletedAt: null,
+            sharedWith: [], // brand-new Discord role — nobody actually has it yet
           }},
           { upsert: true, new: true }
         );

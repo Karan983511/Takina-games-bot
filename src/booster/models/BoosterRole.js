@@ -11,11 +11,12 @@ const schema = new mongoose.Schema({
   icon:           { type: String, default: null },
   template:       { type: String, default: null },
   sharedWith:     { type: [String], default: [] },
+  hiddenBy:       { type: [String], default: [] },   // members who temporarily hid this role
   active:         { type: Boolean, default: true },
   manuallyLinked: { type: Boolean, default: false },
   softDeletedAt:  { type: Date, default: null },
   leftGuildAt:    { type: Date, default: null },
-  boostLostAt:    { type: Date, default: null },  // set when grace period starts
+  boostLostAt:    { type: Date, default: null },
 }, { timestamps: true });
 
 schema.index({ guildId: 1, userId: 1 });

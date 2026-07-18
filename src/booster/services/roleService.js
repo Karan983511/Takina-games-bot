@@ -13,41 +13,25 @@ function roleHex(role) {
 }
 
 function readStoredColorsFromDiscordRole(discordRole) {
-  // discord.js may not expose the enhanced role color object yet; this is best-effort.
   const raw = discordRole?.colors ?? discordRole?.colorData ?? null;
   if (raw && typeof raw === 'object') {
     const primary =
-      raw.primary_color ??
-      raw.primaryColor ??
-      raw.primary ??
-      null;
+      raw.primary_color ?? raw.primaryColor ?? raw.primary ?? null;
     const secondary =
-      raw.secondary_color ??
-      raw.secondaryColor ??
-      raw.secondary ??
-      null;
-
+      raw.secondary_color ?? raw.secondaryColor ?? raw.secondary ?? null;
     if (primary !== null || secondary !== null) {
       return {
-        primary: primary !== null ? `#${Number(primary).toString(16).padStart(6, '0')}` : roleHex(discordRole),
+        primary:   primary   !== null ? `#${Number(primary).toString(16).padStart(6, '0')}` : roleHex(discordRole),
         secondary: secondary !== null ? `#${Number(secondary).toString(16).padStart(6, '0')}` : null,
       };
     }
   }
-
   return { primary: roleHex(discordRole), secondary: null };
 }
 
 async function applyRoleColors(guild, roleId, primary, secondary = null) {
-  const colors = buildRoleColorsPayload({
-    primary,
-    secondary: supportsEnhancedRoleColors(guild) ? secondary : null,
-  });
-  await syncRoleColors(guild, roleId, {
-    primary,
-    secondary,
-  }).catch((err) => {
-    // Keep the role functional even if the style sync fails.
+  const colors = buildRoleColorsPayload({ primary, secondary: supportsEnhancedRoleColors(guild) ? secondary : null });
+  await syncRoleColors(guild, roleId, { primary, secondary }).catch((err) => {
     log('warn', 'RoleService', `Failed to sync enhanced colors for ${roleId}: ${err.message}`);
   });
   return colors;
@@ -62,7 +46,6 @@ async function deleteDiscordRoleEverywhere(guild, roleId, doc, reason) {
   const discordRole = await fetchDiscordRole(guild, roleId);
   if (!discordRole) return false;
 
-  // Remove the role from everyone we can see before deleting it.
   const memberIds = new Set([
     ...doc.sharedWith,
     doc.userId,
@@ -71,7 +54,7 @@ async function deleteDiscordRoleEverywhere(guild, roleId, doc, reason) {
 
   for (const memberId of memberIds) {
     const member = guild.members.cache.get(memberId)
-      ?? await guild.members.fetch(memberId).catch(() => null);
+                ?? await guild.members.fetch(memberId).catch(() => null);
     if (member) await member.roles.remove(discordRole).catch(() => {});
   }
 
@@ -96,14 +79,15 @@ export async function createBoosterRole(guild, userId, { name, color, colorSecon
         roleId:         discordRole.id,
         name,
         color:          color || '#99AAB5',
-        colorSecondary:  colorSecondary || null,
+        colorSecondary: colorSecondary || null,
         icon:           icon  || null,
         template:       template || null,
         active:         true,
         manuallyLinked: false,
         softDeletedAt:  null,
         leftGuildAt:    null,
-        sharedWith:     [], // brand-new Discord role — nobody actually has it yet
+        sharedWith:     [],
+        hiddenBy:       [],
       },
     },
     { upsert: true, new: true },
@@ -152,7 +136,6 @@ export async function linkExistingRole(guild, userId, roleId) {
     throw new Error('This member already has a bot-managed booster role. Have them delete it first with `.role delete`.');
   }
 
-  // move role inside boundaries so it joins the rotation pool
   const settings  = await BoosterSettings.findOne({ guildId: guild.id }).lean().catch(() => null);
   const upperRole = settings?.boundaries?.upperRoleId ? guild.roles.cache.get(settings.boundaries.upperRoleId) : null;
   const lowerRole = settings?.boundaries?.lowerRoleId ? guild.roles.cache.get(settings.boundaries.lowerRoleId) : null;
@@ -161,7 +144,6 @@ export async function linkExistingRole(guild, userId, roleId) {
     const upperPos = upperRole.position;
     const lowerPos = lowerRole.position;
     const inBounds = discordRole.position < upperPos && discordRole.position > lowerPos;
-
     if (!inBounds) {
       await discordRole.setPosition(lowerPos + 1).catch(() => {});
       log('info', 'RoleService', `Moved linked role ${roleId} into boundary at position ${lowerPos + 1}`);
@@ -177,7 +159,7 @@ export async function linkExistingRole(guild, userId, roleId) {
         roleId,
         name:           discordRole.name,
         color:          storedColors.primary,
-        colorSecondary:  storedColors.secondary,
+        colorSecondary: storedColors.secondary,
         active:         true,
         manuallyLinked: true,
         softDeletedAt:  null,
@@ -198,7 +180,6 @@ export async function linkExistingRole(guild, userId, roleId) {
 export async function unlinkRole(guild, userId) {
   const doc = await BoosterRole.findOne({ guildId: guild.id, userId, manuallyLinked: true, active: true });
   if (!doc) throw new Error('No manually linked role found for that member.');
-
   await BoosterRole.deleteOne({ _id: doc._id });
   log('info', 'RoleService', `Admin unlinked role ${doc.roleId} from ${userId}`);
   return doc;
@@ -244,7 +225,10 @@ export async function restoreRole(guild, userId) {
               ?? await guild.members.fetch(userId).catch(() => null);
   if (owner) await owner.roles.add(discordRole).catch(() => {});
 
+  // Re-add Discord role only to members who have NOT hidden it
+  const hiddenSet = new Set(doc.hiddenBy ?? []);
   for (const sharedId of doc.sharedWith) {
+    if (hiddenSet.has(sharedId)) continue;   // they chose to hide — don't force the role back
     const sm = guild.members.cache.get(sharedId)
              ?? await guild.members.fetch(sharedId).catch(() => null);
     if (sm) await sm.roles.add(discordRole).catch(() => {});

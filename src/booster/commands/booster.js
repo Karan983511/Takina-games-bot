@@ -83,7 +83,12 @@ async function shareAdd(message) {
   if (!target) return message.channel.send({ embeds: [errorEmbed('Mention a member. Example: `.booster share add @user`')] });
   const role = await BoosterRole.findOne({ guildId: message.guild.id, userId: message.author.id, active: true });
   if (!role) return message.channel.send({ embeds: [errorEmbed('You don\'t have an active custom role.')] });
-  if (role.sharedWith.includes(target.id)) return message.channel.send({ embeds: [errorEmbed(`${target.user.username} already has access.`)] });
+  if (role.sharedWith.includes(target.id)) {
+    if (role.hiddenBy?.includes(target.id)) {
+      return message.channel.send({ embeds: [errorEmbed(`${target.user.username} already has access to **${role.name}**, but has it **hidden** right now (via \`.role manage\`). They'll need to unhide it themselves.`)] });
+    }
+    return message.channel.send({ embeds: [errorEmbed(`${target.user.username} already has access.`)] });
+  }
   role.sharedWith.push(target.id); await role.save();
   const dr = message.guild.roles.cache.get(role.roleId);
   if (dr) await target.roles.add(dr).catch(() => {});

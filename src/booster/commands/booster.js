@@ -96,20 +96,26 @@ async function shareRemove(message) {
   if (!target) return message.channel.send({ embeds: [errorEmbed('Mention a member.')] });
   const role = await BoosterRole.findOne({ guildId: message.guild.id, userId: message.author.id, active: true });
   if (!role) return message.channel.send({ embeds: [errorEmbed('You don\'t have an active custom role.')] });
-  role.sharedWith = role.sharedWith.filter(id => id !== target.id); await role.save();
+  role.sharedWith = role.sharedWith.filter(id => id !== target.id);
+  role.hiddenBy   = (role.hiddenBy ?? []).filter(id => id !== target.id);  // also clear any hidden state
+  await role.save();
   const dr = message.guild.roles.cache.get(role.roleId);
   if (dr) await target.roles.remove(dr).catch(() => {});
   await audit(message.client, message.guild.id, message.author.id, 'SHARE_REMOVE', { target: target.id });
   return message.channel.send({ embeds: [successEmbed(`Removed ${target.user.username} from your role.`)] });
 }
 
+// Prune sharedWith: remove members who left the server.
+// Hidden members (in hiddenBy) intentionally don't have the Discord role — do NOT prune them.
 async function pruneSharedWith(guild, role) {
   if (!role?.sharedWith?.length) return [];
   const discordRole = role.roleId ? guild.roles.cache.get(role.roleId) : null;
+  const hiddenSet   = new Set(role.hiddenBy ?? []);
   const valid = [];
   for (const id of role.sharedWith) {
     const m = guild.members.cache.get(id) ?? await guild.members.fetch(id).catch(() => null);
-    if (m && (!discordRole || m.roles.cache.has(role.roleId))) valid.push(id);
+    // Keep if member is still in server AND (they've hidden the role OR discord role missing OR they have it)
+    if (m && (hiddenSet.has(id) || !discordRole || m.roles.cache.has(role.roleId))) valid.push(id);
   }
   if (valid.length !== role.sharedWith.length) {
     role.sharedWith = valid;

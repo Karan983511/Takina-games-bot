@@ -225,17 +225,17 @@ export default {
         if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role. Run `.role setup` to create one.")] });
         const dr = guild.roles.cache.get(role.roleId);
         if (role.sharedWith.includes(target.id)) {
+          // Member deliberately hid the role themselves — that's their choice, not something
+          // .role give should silently override. Let the owner know instead of re-adding it.
+          if (role.hiddenBy?.includes(target.id)) {
+            return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} already has access to **${role.name}**, but has it **hidden** right now (via \`.role manage\`). They'll need to unhide it themselves — it can't be restored for them.`)] });
+          }
           // Member is already assigned — check if they have the Discord role (they might have hidden it)
           if (dr && target.roles.cache.has(dr.id)) {
             return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} already has your role.`)] });
           }
-          // Re-add the Discord role (handles both hidden state and accidental removal)
+          // Missing the Discord role, but not because they hid it — accidental removal, safe to re-add
           if (dr) await target.roles.add(dr).catch(() => {});
-          // If they had hidden it, owner re-giving clears the hidden state
-          if (role.hiddenBy?.includes(target.id)) {
-            role.hiddenBy = role.hiddenBy.filter(id => id !== target.id);
-            await role.save();
-          }
           return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Re-gave your role **${role.name}** to ${target} (it was missing from them).`)] });
         }
         role.sharedWith.push(target.id);

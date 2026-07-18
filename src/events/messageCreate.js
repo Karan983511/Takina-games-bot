@@ -51,7 +51,7 @@ export default {
                   '`.role overview` — See all active custom roles & next rotation time',
                   '`.role give @user` — Share your role with another member',
                   '`.role remove @user` — Remove a member from your role',
-                  '`.role removeme` — Remove yourself from a role shared with you',
+                  '`.role manage` — Manage a role shared with you (hide, unhide, or remove yourself)',
                   '`.role reset` — Reset your role to default settings (keeps the role)',
                   '`.role delete` — Permanently delete your custom role',
                 ].join('\n'),
@@ -135,22 +135,26 @@ export default {
 
         let sharedDisplay = 'Nobody';
         if (role.sharedWith?.length) {
-          // Resolve members and drop anyone who no longer actually has the Discord role
-          // (e.g. the role was deleted/expired and recreated without re-granting them)
+          const hiddenSet = new Set(role.hiddenBy ?? []);
           const resolved = await Promise.all(role.sharedWith.map(async id => {
             const m = guild.members.cache.get(id) ?? await guild.members.fetch(id).catch(() => null);
-            const stillHasRole = !!m && (!discordRole || m.roles.cache.has(discordRole.id));
-            return { id, m, stillHasRole };
+            // Hidden members intentionally don't have the Discord role — don't prune them
+            const stillValid = !!m && (hiddenSet.has(id) || !discordRole || m.roles.cache.has(discordRole.id));
+            return { id, m, stillValid };
           }));
-          const valid = resolved.filter(r => r.stillHasRole);
+          const valid = resolved.filter(r => r.stillValid);
           if (valid.length !== role.sharedWith.length) {
             role.sharedWith = valid.map(r => r.id);
             await role.save();
           }
           if (valid.length) {
-            const withNames = valid.map(({ id, m }) => ({ id, name: (m?.displayName ?? m?.user?.username ?? id).toLowerCase() }));
+            const withNames = valid.map(({ id, m }) => ({
+              id,
+              name: (m?.displayName ?? m?.user?.username ?? id).toLowerCase(),
+              hidden: hiddenSet.has(id),
+            }));
             withNames.sort((a, b) => a.name.localeCompare(b.name));
-            sharedDisplay = withNames.map(({ id }) => `<@${id}>`).join(', ');
+            sharedDisplay = withNames.map(({ id, hidden }) => `<@${id}>${hidden ? ' *(hidden)*' : ''}`).join(', ');
           }
         }
 
@@ -221,12 +225,17 @@ export default {
         if (!role) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You don't have an active custom role. Run `.role setup` to create one.")] });
         const dr = guild.roles.cache.get(role.roleId);
         if (role.sharedWith.includes(target.id)) {
-          // DB says they have it — check if Discord role is actually on them
+          // Member is already assigned — check if they have the Discord role (they might have hidden it)
           if (dr && target.roles.cache.has(dr.id)) {
             return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${target.user.username} already has your role.`)] });
           }
-          // Role was accidentally removed — silently re-add it
+          // Re-add the Discord role (handles both hidden state and accidental removal)
           if (dr) await target.roles.add(dr).catch(() => {});
+          // If they had hidden it, owner re-giving clears the hidden state
+          if (role.hiddenBy?.includes(target.id)) {
+            role.hiddenBy = role.hiddenBy.filter(id => id !== target.id);
+            await role.save();
+          }
           return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Re-gave your role **${role.name}** to ${target} (it was missing from them).`)] });
         }
         role.sharedWith.push(target.id);
@@ -237,7 +246,6 @@ export default {
 
       // .role remove @user | .role remove <id> | reply + .role remove
       if (sub === 'remove') {
-        // Try to resolve a live guild member first; fall back to raw ID for left members
         const target = await resolveTarget();
         const rawId  = target?.id ?? args[2]?.replace(/\D/g, '');
         if (!rawId || rawId.length < 17) {
@@ -248,9 +256,11 @@ export default {
         if (!role.sharedWith.includes(rawId)) {
           return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ <@${rawId}> doesn't have your role.`)] });
         }
+        // Permanently remove from both sharedWith and hiddenBy (clears any hidden state too)
         role.sharedWith = role.sharedWith.filter(id => id !== rawId);
+        role.hiddenBy   = (role.hiddenBy ?? []).filter(id => id !== rawId);
         await role.save();
-        // Only attempt Discord role removal if the member is still in the server
+        // Remove Discord role only if the member is still in the server (they might not have it if they hid it, that's fine)
         if (target) {
           const dr = guild.roles.cache.get(role.roleId);
           if (dr) await target.roles.remove(dr).catch(() => {});
@@ -258,37 +268,15 @@ export default {
         return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed <@${rawId}> from **${role.name}**.`)] });
       }
 
-      // .role removeme
-      if (sub === 'removeme') {
-        const roles = await BoosterRole.find({ guildId: guild.id, sharedWith: author.id, active: true });
-        if (!roles.length) return message.channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription("❌ You're not in anyone's shared role.")] });
-        if (roles.length === 1) {
-          const role = roles[0];
-          role.sharedWith = role.sharedWith.filter(id => id !== author.id);
-          await role.save();
-          const dr = guild.roles.cache.get(role.roleId);
-          if (dr) await message.member.roles.remove(dr).catch(() => {});
-          return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Removed yourself from **${role.name}**.`)] });
+      // .role manage — members manage roles shared with them (hide/unhide/remove self)
+      if (sub === 'manage') {
+        try {
+          const { execute } = await import('../booster/commands/roleManage.js');
+          return await execute(message);
+        } catch (err) {
+          console.error('[messageCreate] .role manage error:', err);
+          return message.channel.send({ content: '❌ Something went wrong with `.role manage`. Please try again.' });
         }
-        // Multiple shared roles — show a select menu
-        const options = roles.slice(0, 25).map(r => {
-          const owner = guild.members.cache.get(r.userId);
-          return new StringSelectMenuOptionBuilder()
-            .setLabel(r.name.slice(0, 100))
-            .setValue(r.roleId)
-            .setDescription(`Owner: ${owner?.user.username ?? r.userId}`);
-        });
-        const row = new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId(`rolerm_select_${author.id}`)
-            .setPlaceholder('Which role do you want to leave?')
-            .setMinValues(1).setMaxValues(1)
-            .addOptions(options),
-        );
-        return message.channel.send({
-          embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('👥 Leave a Shared Role').setDescription(`You have **${roles.length}** shared roles. Pick the one you want to leave:`)],
-          components: [row],
-        });
       }
 
       // .role reset — wipe name/color/icon back to defaults without deleting the role
@@ -322,7 +310,7 @@ export default {
         });
       }
 
-      // .role list
+      // .role overview
       if (sub === 'overview') {
         const settings = await BoosterSettings.findOne({ guildId: guild.id }).lean();
         const payload  = await buildRoleListPayload(guild, settings, 0);
@@ -334,14 +322,14 @@ export default {
         return message.channel.send({
           embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🎨 Role Commands')
             .addFields(
-              { name: '`.role setup`',        value: 'Open the custom role editor (create or edit your role)' },
-              { name: '`.role info`',         value: "View your current role — name, colors, icon, and who it's shared with" },
-              { name: '`.role give @user`',   value: 'Give your custom role to another member' },
-              { name: '`.role remove @user`', value: 'Remove a member from your custom role' },
-              { name: '`.role removeme`',     value: 'Remove yourself from a role that was shared with you' },
-              { name: '`.role reset`',        value: 'Reset your role back to default name/color/icon (keeps the role, just wipes settings)' },
-              { name: '`.role delete`',       value: 'Permanently delete your custom role' },
-              { name: '`.role overview`',         value: 'See all active custom roles in the server & when the next rotation fires' },
+              { name: '`.role setup`',         value: 'Open the custom role editor (create or edit your role)' },
+              { name: '`.role info`',          value: "View your current role — name, colors, icon, and who it's shared with" },
+              { name: '`.role give @user`',    value: 'Give your custom role to another member' },
+              { name: '`.role remove @user`',  value: 'Remove a member from your custom role' },
+              { name: '`.role manage`',        value: 'Manage a role shared with you — hide it temporarily, unhide it, or permanently remove yourself' },
+              { name: '`.role reset`',         value: 'Reset your role back to default name/color/icon (keeps the role, just wipes settings)' },
+              { name: '`.role delete`',        value: 'Permanently delete your custom role' },
+              { name: '`.role overview`',      value: 'See all active custom roles in the server & when the next rotation fires' },
             )
             .setFooter({ text: 'Type .help for the full command list.' })],
         });

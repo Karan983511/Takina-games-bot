@@ -13,11 +13,11 @@ export default {
       log('error', 'GuildMemberRemove', err.message);
     }
 
-    // 2. Remove the leaving member from anyone else's sharedWith list
+    // 2. Remove the leaving member from anyone else's sharedWith (and hiddenBy) list
     try {
       const result = await BoosterRole.updateMany(
         { guildId: member.guild.id, sharedWith: member.id },
-        { $pull: { sharedWith: member.id } },
+        { $pull: { sharedWith: member.id, hiddenBy: member.id } },
       );
       if (result.modifiedCount > 0) {
         log('info', 'GuildMemberRemove', `Pruned ${member.id} from ${result.modifiedCount} sharedWith list(s)`);

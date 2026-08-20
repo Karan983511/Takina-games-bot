@@ -10,6 +10,20 @@ export default {
     console.log(`[Takina Games] Logged in as ${client.user.tag}`);
     console.log(`[Takina Games] Serving ${client.guilds.cache.size} guild(s)`);
 
+    // Initialize emoji manager
+    try {
+      await client.emojiManager.initialize();
+    } catch (err) {
+      console.error('[Takina Games] Emoji manager init error:', err.message);
+    }
+
+    // FIX: Sweep orphaned game messages from before restart
+    try {
+      await client.scheduler.sweepOrphanedGames();
+    } catch (err) {
+      console.error('[Takina Games] Game sweep error:', err.message);
+    }
+
     // Register slash commands
     try {
       await registerCommands(client);
@@ -33,13 +47,13 @@ export default {
 
     // Set bot presence
     client.user.setPresence({
-      activities: [{ name: '\ud83c\udfae /setup to configure games', type: ActivityType.Playing }],
+      activities: [{ name: '🎮 /setup to configure games', type: ActivityType.Playing }],
       status: 'online',
     });
 
     // Start game schedulers for every guild
     client.scheduler.startAll();
 
-    console.log(`[Takina Games] \u2705 Ready!`);
+    console.log(`[Takina Games] ✅ Ready!`);
   },
 };

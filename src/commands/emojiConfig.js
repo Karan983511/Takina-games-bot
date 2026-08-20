@@ -70,8 +70,10 @@ export function buildMainPanel(dashboardConfig, categories) {
     const customCount = Object.values(catEmojis).filter((e) => e.isCustom).length;
     const totalCount = Object.keys(catEmojis).length;
     return {
-      name: `${cat.toUpperCase()}`,
-      value: `${totalCount} emojis${customCount > 0 ? ` • ${customCount} custom` : ''}`,
+      name: `${categoryIcon(cat)} ${cat.toUpperCase()}`,
+      value: customCount > 0
+        ? `${totalCount} emojis\n✨ ${customCount} custom`
+        : `${totalCount} emojis\n📌 all default`,
       inline: true,
     };
   });
@@ -80,33 +82,57 @@ export function buildMainPanel(dashboardConfig, categories) {
     .setColor(0x5865f2)
     .setTitle('🎨 Emoji Configuration')
     .setDescription(
-      `Manage custom emojis for this server. Click a category to view and modify emojis.\n\n` +
-      `**Total Emojis:** ${totalEmojis}\n` +
-      `**Custom Overrides:** ${customEmojis}`
+      `Manage custom emojis for this server. Click a category below to view and modify its emojis.`
     )
-    .addFields(fields)
-    .setFooter({ text: 'Select a category to manage emojis' });
+    .addFields(
+      { name: '📊 Total Emojis', value: `${totalEmojis}`, inline: true },
+      { name: '✨ Custom Overrides', value: `${customEmojis}`, inline: true },
+      { name: '📌 Using Default', value: `${totalEmojis - customEmojis}`, inline: true },
+      ...fields
+    )
+    .setFooter({ text: 'Select a category below to manage its emojis' })
+    .setTimestamp();
 
   return embed;
 }
 
+function categoryIcon(category) {
+  const icons = {
+    status: '🟢',
+    games: '🎮',
+    currency: '💰',
+    misc: '🔧',
+    ranks: '🏆',
+    moderation: '🛡️',
+  };
+  return icons[category.toLowerCase()] || '🔹';
+}
+
 export function buildCategoryPanel(category, categoryEmojis) {
+  const entries = Object.entries(categoryEmojis);
+  const customCount = entries.filter(([, e]) => e.isCustom).length;
+
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
-    .setTitle(`🎨 ${category.toUpperCase()} Emojis`)
-    .setDescription('Select an emoji from the dropdown to modify it.');
+    .setTitle(`${categoryIcon(category)} ${category.toUpperCase()} Emojis`)
+    .setDescription(
+      `Select an emoji from the dropdown below to modify it.\n\n` +
+      `**${entries.length}** emoji${entries.length === 1 ? '' : 's'} in this category` +
+      (customCount > 0 ? ` • **${customCount}** customized` : '')
+    );
 
-  const fields = Object.entries(categoryEmojis).map(([key, emoji]) => {
-    const status = emoji.isCustom ? '✨ CUSTOM' : '📌 DEFAULT';
+  const fields = entries.map(([key, emoji]) => {
+    const status = emoji.isCustom ? '✨ Custom' : '📌 Default';
     const display = emoji.current?.display || emoji.default;
     return {
       name: `${display} ${emoji.label}`,
-      value: `\`${key}\` — ${status}`,
+      value: `\`${key}\`\n${status}`,
       inline: true,
     };
   });
 
   embed.addFields(fields);
+  embed.setFooter({ text: '⬅️ Back returns to the category overview' });
 
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`emoji_select_${category}`)
@@ -117,12 +143,12 @@ export function buildCategoryPanel(category, categoryEmojis) {
           .setLabel(emoji.label)
           .setValue(key)
           .setEmoji(emoji.current?.display || emoji.default)
-          .setDescription(emoji.isCustom ? 'Custom emoji' : 'Using default')
+          .setDescription(emoji.isCustom ? '✨ Custom emoji set' : '📌 Using default')
       )
     );
 
   const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('emoji_back').setLabel('⬅️ Back').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('emoji_back').setLabel('Back').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
   );
 
   return {
@@ -134,31 +160,36 @@ export function buildCategoryPanel(category, categoryEmojis) {
 
 export function buildEmojiDetailsPanel(emojiKey, emojiData, serverEmojis) {
   const embed = new EmbedBuilder()
-    .setColor(0xf47fff)
-    .setTitle(`Modify: ${emojiData.label}`)
+    .setColor(emojiData.isCustom ? 0xf47fff : 0x99aab5)
+    .setTitle(`${emojiData.current?.display || emojiData.default}  Modify: ${emojiData.label}`)
     .setDescription(
-      `**Current:** ${emojiData.current?.display || emojiData.default}\n` +
-      `**Default:** ${emojiData.default}\n` +
-      `**Type:** ${emojiData.isCustom ? 'Custom Emoji' : 'Unicode Emoji'}`
+      emojiData.isCustom
+        ? `This emoji is currently **customized**. You can reset it to default or pick a different custom emoji below.`
+        : `This emoji is currently using its **default** unicode version. Pick a custom emoji from a server below to override it.`
     );
 
   embed.addFields(
+    { name: 'Current', value: `${emojiData.current?.display || emojiData.default}`, inline: true },
+    { name: 'Default', value: `${emojiData.default}`, inline: true },
+    { name: 'Status', value: emojiData.isCustom ? '✨ Custom' : '📌 Default', inline: true },
     { name: 'Key', value: `\`${emojiKey}\``, inline: true },
-    { name: 'Category', value: `${emojiData.category || 'misc'}`, inline: true }
+    { name: 'Category', value: `${categoryIcon(emojiData.category || 'misc')} ${emojiData.category || 'misc'}`, inline: true }
   );
 
   if (emojiData.current) {
-    embed.addFields(
-      { name: 'Custom Emoji ID', value: emojiData.current.id, inline: false },
-      { name: 'Source Server', value: emojiData.current.server, inline: false }
-    );
+    const sourceServer = serverEmojis.find((s) => s.id === emojiData.current.server);
+    embed.addFields({
+      name: 'Custom Emoji Source',
+      value: `**${sourceServer ? sourceServer.name : 'Unknown server'}**\n\`${emojiData.current.name}\` (\`${emojiData.current.id}\`)`,
+      inline: false,
+    });
   }
 
   const serverOptions = serverEmojis.map((server) =>
     new StringSelectMenuOptionBuilder()
-      .setLabel(`${server.name} (${server.emojiCount})`)
+      .setLabel(`${server.name} (${server.emojiCount} emojis)`)
       .setValue(`server_${server.id}`)
-      .setDescription('Select emojis from this server')
+      .setDescription('Browse this server\'s custom emojis')
   );
 
   const serverSelect = new StringSelectMenuBuilder()
@@ -167,17 +198,20 @@ export function buildEmojiDetailsPanel(emojiKey, emojiData, serverEmojis) {
     .addOptions(
       serverOptions.length
         ? serverOptions
-        : [new StringSelectMenuOptionBuilder().setLabel('No servers with emojis').setValue('none').setDescription('Invite bot to a server with custom emojis')]
+        : [new StringSelectMenuOptionBuilder().setLabel('No servers with emojis').setValue('none').setDescription('Invite the bot to a server with custom emojis')]
     );
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`emoji_reset_${emojiKey}`)
       .setLabel('Reset to Default')
-      .setStyle(ButtonStyle.Danger),
+      .setEmoji('🔄')
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(!emojiData.isCustom),
     new ButtonBuilder()
       .setCustomId(`emoji_back_category_${emojiData.category || 'status'}`)
-      .setLabel('⬅️ Back')
+      .setLabel('Back')
+      .setEmoji('⬅️')
       .setStyle(ButtonStyle.Secondary)
   );
 
@@ -188,13 +222,30 @@ export function buildEmojiDetailsPanel(emojiKey, emojiData, serverEmojis) {
   };
 }
 
-export function buildServerEmojiPicker(emojiKey, serverName, serverEmojis) {
+const EMOJIS_PER_PAGE = 25;
+
+export function buildServerEmojiPicker(emojiKey, serverName, serverEmojis, page = 0, serverId = null) {
+  const totalPages = Math.max(1, Math.ceil(serverEmojis.length / EMOJIS_PER_PAGE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * EMOJIS_PER_PAGE;
+  const pageEmojis = serverEmojis.slice(start, start + EMOJIS_PER_PAGE);
+
   const embed = new EmbedBuilder()
     .setColor(0xfee75c)
-    .setTitle(`Select Emoji from ${serverName}`)
-    .setDescription(`Choose a custom emoji to use for **${emojiKey}**\n\nShowing ${Math.min(serverEmojis.length, 25)} of ${serverEmojis.length} emojis (Discord allows up to 25 choices).`);
+    .setTitle(`😀 Select Emoji from ${serverName}`)
+    .setDescription(`Choose a custom emoji to use for \`${emojiKey}\`.`)
+    .addFields({
+      name: 'Showing',
+      value: `${start + 1}–${start + pageEmojis.length} of **${serverEmojis.length}** emojis`,
+      inline: true,
+    })
+    .setFooter({
+      text: totalPages > 1
+        ? `Page ${safePage + 1}/${totalPages} • Use Prev/Next to browse, or Search to jump by name`
+        : 'Pick an emoji from the dropdown below',
+    });
 
-  const options = serverEmojis.slice(0, 25).map((emoji) =>
+  const options = pageEmojis.map((emoji) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(emoji.name.slice(0, 100))
       .setValue(`emoji_${emoji.id}`)
@@ -206,8 +257,28 @@ export function buildServerEmojiPicker(emojiKey, serverName, serverEmojis) {
     .setPlaceholder('Select custom emoji...')
     .addOptions(options);
 
+  // Encode key/server/page in the customId so paging & search survive interaction round-trips.
+  const navBase = `${emojiKey}::${serverId ?? ''}::${safePage}`;
+
   const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('emoji_cancel_picker').setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder()
+      .setCustomId(`emoji_page_prev_${navBase}`)
+      .setLabel('Prev')
+      .setEmoji('◀️')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage === 0),
+    new ButtonBuilder()
+      .setCustomId(`emoji_page_next_${navBase}`)
+      .setLabel('Next')
+      .setEmoji('▶️')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage >= totalPages - 1),
+    new ButtonBuilder()
+      .setCustomId(`emoji_search_${emojiKey}::${serverId ?? ''}`)
+      .setLabel('Search')
+      .setEmoji('🔎')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('emoji_cancel_picker').setLabel('Cancel').setEmoji('✖️').setStyle(ButtonStyle.Secondary)
   );
 
   return {

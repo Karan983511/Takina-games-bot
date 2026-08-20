@@ -152,6 +152,29 @@ export async function runGraceExpirySweep(client) {
           }
         } else {
           // ── Grace still running — reschedule the timer for remaining time ─
+          const freshMember = await guild.members.fetch(doc.userId).catch(() => null);
+
+          // FIX: If member left the guild while bot was down, don't reschedule
+          if (!freshMember) {
+            await BoosterRole.updateOne(
+              { guildId, userId: doc.userId },
+              { $set: { active: false, roleId: null, boostLostAt: null } }
+            );
+            expired++;
+            log('info', 'CleanupService', `Grace sweep: member ${doc.userId} left guild ${guildId}, cleaned up doc`);
+            continue;
+          }
+
+          // If member re-boosted while bot was down, clear the grace
+          if (freshMember.premiumSince) {
+            await BoosterRole.updateOne(
+              { guildId, userId: doc.userId },
+              { $set: { boostLostAt: null } }
+            );
+            log('info', 'CleanupService', `Grace sweep: member ${doc.userId} re-boosted, grace cleared`);
+            continue;
+          }
+
           resumed++;
           const userId  = doc.userId;
           const docName = doc.name;

@@ -30,9 +30,6 @@ export class GameScheduler {
     if (c) { clearTimeout(c); this.cooldowns.delete(guildId); }
   }
 
-  /**
-   * Clean up all state for a guild (called on guild leave)
-   */
   cleanupGuild(guildId) {
     this.stopGuild(guildId);
     this.active.delete(guildId);
@@ -44,6 +41,60 @@ export class GameScheduler {
     for (const guild of this.client.guilds.cache.values()) {
       const cfg = this.client.config.get(guild.id);
       if (cfg.enabled) this.startGuild(guild.id);
+    }
+  }
+
+  /**
+   * FIX: Sweep orphaned game messages from before restart.
+   * When the bot restarts, msgRefQueue is empty. Any game messages
+   * sent before the restart will never be deleted. This method
+   * finds and deletes them on startup.
+   */
+  async sweepOrphanedGames() {
+    console.log('[GameScheduler] Sweeping orphaned game messages...');
+    let totalDeleted = 0;
+
+    for (const guild of this.client.guilds.cache.values()) {
+      try {
+        const cfg = this.client.config.get(guild.id);
+        if (!cfg || !cfg.enabled) continue;
+
+        const channels = cfg.allowedChannels.length > 0
+          ? cfg.allowedChannels
+          : [...guild.channels.cache.values()]
+              .filter(ch => ch.type === ChannelType.GuildText)
+              .map(ch => ch.id);
+
+        for (const chId of channels) {
+          const ch = guild.channels.cache.get(chId);
+          if (!ch) continue;
+
+          const msgs = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+          if (!msgs) continue;
+
+          // Find bot-sent game messages (identified by embed footer)
+          const botGames = [...msgs.values()].filter(m =>
+            m.author.id === this.client.user.id &&
+            m.embeds.length > 0 &&
+            m.embeds[0].footer?.text === 'Takina Games'
+          );
+
+          // Keep the newest, delete the rest
+          if (botGames.length > 1) {
+            botGames.sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+            for (let i = 1; i < botGames.length; i++) {
+              await botGames[i].delete().catch(() => {});
+              totalDeleted++;
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[GameScheduler] Sweep error for guild ${guild.id}:`, err.message);
+      }
+    }
+
+    if (totalDeleted > 0) {
+      console.log(`[GameScheduler] Deleted ${totalDeleted} orphaned game message(s)`);
     }
   }
 
@@ -107,29 +158,25 @@ export class GameScheduler {
     const queue = this.msgRefQueue.get(guildId) ?? [];
     if (queue.length >= 2) {
       const oldest = queue.shift();
-      // Fire-and-forget parallel deletion with Promise.all
       (async () => {
         try {
           const prevCh = guild.channels.cache.get(oldest.channelId);
           if (prevCh) {
-            // Fetch message and reply messages in parallel
             const [prevMsg, ...replyMsgs] = await Promise.allSettled([
               prevCh.messages.fetch(oldest.messageId).catch(() => null),
               ...(oldest.replyIds ?? []).map(rid => prevCh.messages.fetch(rid).catch(() => null)),
             ]);
 
-            // Delete main message if it exists
             if (prevMsg.status === 'fulfilled' && prevMsg.value) {
               await prevMsg.value.delete().catch(() => {});
             }
 
-            // Delete reply messages in parallel
             const deletionPromises = replyMsgs
               .filter(msg => msg.status === 'fulfilled' && msg.value)
               .map(msg => msg.value.delete().catch(() => {}));
             await Promise.all(deletionPromises);
           }
-        } catch { /* ignore — message already deleted or missing */ }
+        } catch { /* ignore */ }
       })();
     }
 
@@ -227,7 +274,6 @@ export class GameScheduler {
         if (original) {
           await original.edit({ embeds: [def.embed(state.game, true)], components: def.disabledRows() });
         }
-        // Send a separate results message and track it for later deletion
         const resultsMsg = await channel.send({ embeds: [def.embed(state.game, true)] }).catch(() => null);
         if (resultsMsg) {
           const queue = this.msgRefQueue.get(guildId) ?? [];
@@ -353,8 +399,6 @@ export class GameScheduler {
     }
 
     if (def.isCorrect(state.game, customId)) {
-      // Acknowledge the interaction immediately — _endGame makes multiple API calls
-      // and Discord's 3-second response window can expire before it finishes.
       try { await interaction.deferUpdate(); } catch { /* ignore */ }
       await this._endGame(interaction.guild.id, interaction.user);
       return;

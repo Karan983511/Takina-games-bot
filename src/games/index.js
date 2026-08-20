@@ -46,6 +46,17 @@ function patchTimeout(embed, seconds) {
   return embed;
 }
 
+/**
+ * Fisher-Yates shuffle: O(n) time, proper randomization
+ */
+function fisherYatesShuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
 const TEXT_GAMES = {
   flag: {
     build:   () => buildFlagGame(),
@@ -170,7 +181,8 @@ export async function grantRewardRole(guild, userId, roleIds, configService) {
   const available = roleIds.filter(id => !userOwned.includes(id));
   if (!available.length) return null; // already owns everything, skip
 
-  const shuffled = [...available].sort(() => Math.random() - 0.5);
+  // Use Fisher-Yates shuffle for proper O(n) randomization
+  const shuffled = fisherYatesShuffle([...available]);
 
   for (const roleId of shuffled) {
     try {

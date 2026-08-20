@@ -33,6 +33,20 @@ export default {
 
     const customId = interaction.customId;
 
+    // ── Emoji config interactions ──────────────────────────────────────────────
+    if (customId?.startsWith('emoji_')) {
+      try {
+        const { handleEmojiInteraction } = await import('../handlers/emojiHandler.js');
+        await handleEmojiInteraction(interaction);
+      } catch (err) {
+        console.error('[InteractionCreate] Emoji handler error:', err);
+        const reply = { content: '❌ Something went wrong with emoji configuration.', flags: MessageFlags.Ephemeral };
+        if (interaction.replied || interaction.deferred) await interaction.followUp(reply).catch(() => {});
+        else await interaction.reply(reply).catch(() => {});
+      }
+      return;
+    }
+
     // ── /bsetup dashboard interactions ─────────────────────────────────────────
     if (customId?.startsWith('bsetup_')) {
       try {
@@ -95,30 +109,12 @@ export default {
 
       if (action === 'confirm') {
         try {
-          const guild = interaction.guild;
-          const { default: BoosterRoleModel } = await import('../booster/models/BoosterRole.js');
-          const doc = await BoosterRoleModel.findOne({ guildId: guild.id, userId: ownerId, active: true });
-          if (!doc) {
-            return interaction.update({
-              embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription('⚠️ No active role found.')],
-              components: [],
-            });
-          }
-          const discordRole = guild.roles.cache.get(doc.roleId);
-          if (discordRole) {
-            await discordRole.edit({ name: 'Booster Role', color: 0x99AAB5, icon: null, unicodeEmoji: null }).catch(() => {});
-          }
-          doc.name = 'Booster Role'; doc.color = '#99AAB5'; doc.colorSecondary = null;
-          doc.iconType = 'none'; doc.icon = null;
-          await doc.save();
-          return interaction.update({
-            embeds: [new EmbedBuilder().setColor(0x57F287).setDescription('✅ Your role has been reset to defaults. Use `.role setup` to customize it again.')],
-            components: [],
-          });
+          const { handleResetConfirm } = await import('../booster/commands/roleManage.js');
+          await handleResetConfirm(interaction, client);
         } catch (err) {
-          console.error('[InteractionCreate] rolereset error:', err);
+          console.error('[InteractionCreate] role reset error:', err);
           return interaction.update({
-            embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Reset failed: ${err.message}`)],
+            embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ Reset failed.')],
             components: [],
           });
         }
@@ -126,78 +122,19 @@ export default {
       return;
     }
 
-    // ── .role delete confirm/cancel ────────────────────────────────────────────
-    if (customId?.startsWith('roledelete_')) {
-      const parts  = customId.split('_');
-      const action = parts[1];
-      const ownerId = parts[2];
-
-      if (interaction.user.id !== ownerId) {
-        return interaction.reply({ content: "⛔ This isn't your confirmation.", flags: MessageFlags.Ephemeral });
-      }
-
-      if (action === 'cancel') {
-        return interaction.update({
-          embeds: [new EmbedBuilder().setColor(0x5865F2).setDescription('✅ Cancelled — your role was not deleted.')],
-          components: [],
-        });
-      }
-
-      if (action === 'confirm') {
-        try {
-          const { deleteBoosterRole } = await import('../booster/services/roleService.js');
-          const doc = await deleteBoosterRole(interaction.guild, ownerId);
-          if (!doc) {
-            return interaction.update({
-              embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription('⚠️ No active role found — it may have already been deleted.')],
-              components: [],
-            });
-          }
-          return interaction.update({
-            embeds: [new EmbedBuilder().setColor(0x57F287).setDescription(`✅ Your role **${doc.name}** has been deleted.`)],
-            components: [],
-          });
-        } catch (err) {
-          console.error('[InteractionCreate] roledelete error:', err);
-          return interaction.update({
-            embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Failed to delete: ${err.message}`)],
-            components: [],
-          });
-        }
-      }
-      return;
-    }
-
-    // ── /setup (game bot setup) ────────────────────────────────────────────────
-    if (customId?.startsWith('setup_')) {
-      const setup = client.commands.get('setup');
-      if (setup?.handleComponent) {
-        try {
-          await setup.handleComponent(interaction, client);
-        } catch (err) {
-          console.error('[InteractionCreate] Setup component error:', err);
-          const reply = { content: '❌ Something went wrong.', flags: MessageFlags.Ephemeral };
-          if (interaction.replied || interaction.deferred) await interaction.followUp(reply).catch(() => {});
-          else if (interaction.isModalSubmit()) await interaction.reply(reply).catch(() => {});
-          else await interaction.update({ content: '❌ Something went wrong.', components: [] }).catch(() => {});
-        }
-      }
-      return;
-    }
-
-    // ── .loot equip/unequip select menu ───────────────────────────────────────
+    // ── Loot equip/unequip select menu ─────────────────────────────────────────
     if (customId?.startsWith('loot_toggle_')) {
-      const userId = customId.split('_').pop();
-      if (interaction.user.id !== userId) {
-        return interaction.reply({ content: "⛔ This isn't your loot panel!", flags: MessageFlags.Ephemeral });
+      const ownerId = customId.replace('loot_toggle_', '');
+      if (interaction.user.id !== ownerId) {
+        return interaction.reply({ content: "⛔ This isn't your loot box.", flags: MessageFlags.Ephemeral });
       }
 
-      const roleId  = interaction.values[0];
       const guildId = interaction.guild.id;
-      const coll    = client.config.getUserCollection(guildId, userId);
-      const member  = interaction.guild.members.cache.get(userId)
-                   ?? await interaction.guild.members.fetch(userId).catch(() => null);
+      const userId  = interaction.user.id;
+      const roleId  = interaction.values[0];
+      const member  = interaction.guild.members.cache.get(userId);
 
+      const coll = client.config.getUserCollection(guildId, userId);
       const isEquipped = coll.equipped.includes(roleId);
       if (isEquipped) {
         client.config.unequipRole(guildId, userId, roleId);

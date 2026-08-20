@@ -5,6 +5,7 @@ import { loadCommands, registerCommands } from './handlers/commandLoader.js';
 import { loadEvents } from './handlers/eventLoader.js';
 import { GameScheduler } from './handlers/gameScheduler.js';
 import { ConfigService } from './services/configService.js';
+import { EmojiManager } from './services/emojiManager.js';
 
 // ─── Validate environment ──────────────────────────────────────────────────────
 if (!process.env.DISCORD_TOKEN) {
@@ -36,6 +37,7 @@ client.commands       = new Collection();
 client.config         = new ConfigService();
 client.scheduler      = new GameScheduler(client);
 client.recentActivity = new Map();
+client.emojiManager   = new EmojiManager(client);
 
 client.rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 

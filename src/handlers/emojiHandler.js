@@ -1,11 +1,11 @@
-import EmojiConfig from '../booster/models/EmojiConfig.js';
 import { log } from '../booster/utils/logger.js';
 import {
   buildCategoryPanel,
   buildEmojiDetailsPanel,
   buildServerEmojiPicker,
+  buildMainPanel,
 } from '../commands/emojiConfig.js';
-import { getAllCategories, getEmojisByCategory } from '../utils/defaultEmojis.js';
+import { getAllCategories } from '../utils/defaultEmojis.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 
 /**
@@ -17,7 +17,7 @@ export async function handleEmojiInteraction(interaction) {
   const emojiManager = interaction.client.emojiManager;
 
   try {
-    // Category selection
+    // ── Category selection ─────────────────────────────────────────────
     if (customId.startsWith('emoji_category_')) {
       const category = customId.replace('emoji_category_', '');
       const dashboardConfig = await emojiManager.getConfigForDashboard(guildId);
@@ -34,16 +34,18 @@ export async function handleEmojiInteraction(interaction) {
       });
     }
 
-    // Emoji selection from category
-    if (customId.startsWith('emoji_select_')) {
+    // ── Emoji selection from category dropdown ─────────────────────────
+    if (customId.startsWith('emoji_select_') && !customId.startsWith('emoji_select_from_server_')) {
       const category = customId.replace('emoji_select_', '');
       const selectedEmojiKey = interaction.values[0];
       const dashboardConfig = await emojiManager.getConfigForDashboard(guildId);
-      const emojiData = dashboardConfig[category][selectedEmojiKey];
+      const emojiData = dashboardConfig[category]?.[selectedEmojiKey];
 
       if (!emojiData) {
         return interaction.reply({ content: '❌ Emoji not found', ephemeral: true });
       }
+
+      emojiData.category = category;
 
       const serverEmojis = emojiManager.getAccessibleServers();
       const panel = buildEmojiDetailsPanel(selectedEmojiKey, emojiData, serverEmojis);
@@ -54,12 +56,17 @@ export async function handleEmojiInteraction(interaction) {
       });
     }
 
-    // Server selection for emoji picker
+    // ── Server selection for emoji picker ──────────────────────────────
     if (customId.startsWith('emoji_server_select_')) {
       const emojiKey = customId.replace('emoji_server_select_', '');
-      const selectedServerId = interaction.values[0].replace('server_', '');
+      const selectedValue = interaction.values[0];
+      if (selectedValue === 'none') {
+        return interaction.reply({ content: '❌ No servers with custom emojis available.', ephemeral: true });
+      }
 
-      const selectedServer = emojiManager.getAccessibleServers().find(s => s.id === selectedServerId);
+      const selectedServerId = selectedValue.replace('server_', '');
+      const selectedServer = emojiManager.getAccessibleServers().find((s) => s.id === selectedServerId);
+
       if (!selectedServer) {
         return interaction.reply({ content: '❌ Server not found', ephemeral: true });
       }
@@ -79,19 +86,18 @@ export async function handleEmojiInteraction(interaction) {
       });
     }
 
-    // Emoji selection from server
+    // ── Emoji selection from server ────────────────────────────────────
     if (customId.startsWith('emoji_select_from_server_')) {
       const emojiKey = customId.replace('emoji_select_from_server_', '');
       const selectedEmojiId = interaction.values[0].replace('emoji_', '');
 
-      // Find the emoji in all accessible servers
       const servers = emojiManager.getAccessibleServers();
       let selectedEmoji = null;
       let sourceServerId = null;
 
       for (const server of servers) {
         const emojis = emojiManager.getServerEmojis(server.id);
-        const found = emojis.find(e => e.id === selectedEmojiId);
+        const found = emojis.find((e) => e.id === selectedEmojiId);
         if (found) {
           selectedEmoji = found;
           sourceServerId = server.id;
@@ -106,7 +112,6 @@ export async function handleEmojiInteraction(interaction) {
         });
       }
 
-      // Validate emoji is accessible
       if (!emojiManager.validateCustomEmoji(selectedEmojiId, sourceServerId)) {
         return interaction.reply({
           content: '❌ This emoji is no longer accessible',
@@ -114,78 +119,100 @@ export async function handleEmojiInteraction(interaction) {
         });
       }
 
-      // Set the custom emoji
       await emojiManager.setCustomEmoji(
         guildId,
         emojiKey,
         selectedEmojiId,
         selectedEmoji.name,
         sourceServerId,
-        interaction.user.id
+        interaction.user.id,
+        selectedEmoji.animated
       );
 
-      return interaction.reply({
+      return interaction.update({
         content: `✅ Successfully set **${emojiKey}** to ${selectedEmoji.unicode}`,
-        ephemeral: true,
+        embeds: [],
+        components: [],
       });
     }
 
-    // Reset emoji to default
+    // ── Reset emoji to default ─────────────────────────────────────────
     if (customId.startsWith('emoji_reset_')) {
       const emojiKey = customId.replace('emoji_reset_', '');
-
       await emojiManager.removeCustomEmoji(guildId, emojiKey);
 
-      return interaction.reply({
+      return interaction.update({
         content: `✅ Reset **${emojiKey}** to default emoji`,
-        ephemeral: true,
+        embeds: [],
+        components: [],
       });
     }
 
-    // Back buttons
+    // ── Back to main menu ────────────────────────────────────────────
     if (customId === 'emoji_back') {
       const dashboardConfig = await emojiManager.getConfigForDashboard(guildId);
       const categories = getAllCategories();
 
-      const categoryButtons = new ActionRowBuilder().addComponents(
-        ...categories.map((cat, idx) =>
-          new ButtonBuilder()
-            .setCustomId(`emoji_category_${cat}`)
-            .setLabel(cat.toUpperCase())
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(idx > 4)
-        )
-      );
-
-      const { buildMainPanel } = await import('../commands/emojiConfig.js');
+      const categoryButtons = buildCategoryRows(categories);
       const embed = buildMainPanel(dashboardConfig, categories);
 
       return interaction.update({
         embeds: [embed],
-        components: [categoryButtons],
+        components: categoryButtons,
       });
     }
 
-    if (customId === 'emoji_back_category') {
-      return interaction.reply({
-        content: 'Please use `/emoji-config` again to return to the main menu',
-        ephemeral: true,
+    // ── Back to category ───────────────────────────────────────────────
+    if (customId.startsWith('emoji_back_category_')) {
+      const category = customId.replace('emoji_back_category_', '');
+      const dashboardConfig = await emojiManager.getConfigForDashboard(guildId);
+      const categoryEmojis = dashboardConfig[category];
+
+      if (!categoryEmojis) {
+        return interaction.reply({ content: '❌ Category not found', ephemeral: true });
+      }
+
+      const panel = buildCategoryPanel(category, categoryEmojis);
+      return interaction.update({
+        embeds: [panel.embed],
+        components: [panel.selectRow, panel.buttonRow],
       });
     }
 
+    // ── Cancel picker ──────────────────────────────────────────────────
     if (customId === 'emoji_cancel_picker') {
-      return interaction.reply({
+      return interaction.update({
         content: '❌ Cancelled emoji selection',
-        ephemeral: true,
+        embeds: [],
+        components: [],
       });
     }
   } catch (err) {
     log('error', 'EmojiHandler', `Error handling emoji interaction: ${err.message}`);
-    return interaction.reply({
-      content: '❌ An error occurred while processing your request',
-      ephemeral: true,
-    }).catch(() => {});
+    return interaction
+      .reply({
+        content: '❌ An error occurred while processing your request',
+        ephemeral: true,
+      })
+      .catch(() => {});
   }
+}
+
+function buildCategoryRows(categories) {
+  const rows = [];
+  for (let i = 0; i < categories.length; i += 5) {
+    const slice = categories.slice(i, i + 5);
+    const row = new ActionRowBuilder().addComponents(
+      ...slice.map((cat) =>
+        new ButtonBuilder()
+          .setCustomId(`emoji_category_${cat}`)
+          .setLabel(cat.toUpperCase())
+          .setStyle(ButtonStyle.Primary)
+      )
+    );
+    rows.push(row);
+  }
+  return rows;
 }
 
 log('info', 'EmojiHandler', 'Emoji interaction handler loaded');

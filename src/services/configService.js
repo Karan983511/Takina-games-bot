@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-// ─── Schemas ───────────────────────────────────────────────────────────────────
+// ─── Schemas ──────────────────────────────────────────────────────────
 
 const GuildConfigSchema = new mongoose.Schema(
   {
@@ -39,7 +39,7 @@ UserCollectionSchema.index({ guildId: 1, userId: 1 }, { unique: true });
 const GuildConfig    = mongoose.model('GuildConfig',    GuildConfigSchema);
 const UserCollection = mongoose.model('UserCollection', UserCollectionSchema);
 
-// ─── Defaults ──────────────────────────────────────────────────────────────────
+// ─── Defaults ──────────────────────────────────────────────────────────
 
 function defaultConfig(guildId) {
   return {
@@ -75,12 +75,15 @@ function normalize(guildId, data = {}) {
   };
 }
 
-// ─── ConfigService ─────────────────────────────────────────────────────────────
+// ─── ConfigService ────────────────────────────────────────────────────────
 
 export class ConfigService {
   constructor() {
     this._cache     = new Map(); // guildId → guild config
     this._userCache = new Map(); // `${guildId}:${userId}` → { owned, equipped }
+    this._persistTimers = new Map(); // guildId → debounce timer handle
+    this._userPersistTimers = new Map(); // `${guildId}:${userId}` → debounce timer handle
+    this.PERSIST_DEBOUNCE_MS = 500; // Wait 500ms before persisting to batch updates
   }
 
   /** Connect to MongoDB and pre-load all data. */
@@ -110,13 +113,13 @@ export class ConfigService {
     console.log(`[ConfigService] ✅ Connected to MongoDB — ${guildDocs.length} guild(s), ${userDocs.length} user collection(s) loaded`);
   }
 
-  // ── Guild config ───────────────────────────────────────────────────────────
+  // ── Guild config ────────────────────────────────────────────────────────
 
   get(guildId) {
     if (!this._cache.has(guildId)) {
       const def = defaultConfig(guildId);
       this._cache.set(guildId, def);
-      this._persist(guildId).catch(() => {});
+      this._schedulePersist(guildId);
     }
     return this._cache.get(guildId);
   }
@@ -125,7 +128,7 @@ export class ConfigService {
     const current = this.get(guildId);
     const updated  = { ...current, ...updates };
     this._cache.set(guildId, updated);
-    this._persist(guildId).catch(() => {});
+    this._schedulePersist(guildId);
     return updated;
   }
 
@@ -134,7 +137,7 @@ export class ConfigService {
     if (!cfg.rewardRoleIds.includes(roleId)) {
       cfg.rewardRoleIds.push(roleId);
       this._cache.set(guildId, cfg);
-      this._persist(guildId).catch(() => {});
+      this._schedulePersist(guildId);
     }
     return cfg;
   }
@@ -143,7 +146,7 @@ export class ConfigService {
     const cfg = this.get(guildId);
     cfg.rewardRoleIds = cfg.rewardRoleIds.filter(id => id !== roleId);
     this._cache.set(guildId, cfg);
-    this._persist(guildId).catch(() => {});
+    this._schedulePersist(guildId);
     return cfg;
   }
 
@@ -151,7 +154,7 @@ export class ConfigService {
     const cfg = this.get(guildId);
     cfg.games[gameKey] = enabled;
     this._cache.set(guildId, cfg);
-    this._persist(guildId).catch(() => {});
+    this._schedulePersist(guildId);
     return cfg;
   }
 
@@ -164,7 +167,10 @@ export class ConfigService {
 
   delete(guildId) {
     this._cache.delete(guildId);
-    GuildConfig.deleteOne({ guildId }).catch(() => {});
+    this._clearPersistTimer(guildId);
+    GuildConfig.deleteOne({ guildId }).catch((err) => {
+      console.error(`[ConfigService] Failed to delete guild config for ${guildId}:`, err.message);
+    });
   }
 
   // ── User collections ───────────────────────────────────────────────────────
@@ -181,7 +187,7 @@ export class ConfigService {
     const coll = this.getUserCollection(guildId, userId);
     const updated = { ...coll, ...updates };
     this._userCache.set(`${guildId}:${userId}`, updated);
-    this._persistUser(guildId, userId).catch(() => {});
+    this._scheduleUserPersist(guildId, userId);
     return updated;
   }
 
@@ -219,7 +225,26 @@ export class ConfigService {
     return this.setUserCollection(guildId, userId, { equipped: [...coll.owned] });
   }
 
-  // ── Private ────────────────────────────────────────────────────────────────
+  // ── Private ──────────────────────────────────────────────────────────
+
+  _clearPersistTimer(guildId) {
+    const timer = this._persistTimers.get(guildId);
+    if (timer) {
+      clearTimeout(timer);
+      this._persistTimers.delete(guildId);
+    }
+  }
+
+  _schedulePersist(guildId) {
+    this._clearPersistTimer(guildId);
+    const timer = setTimeout(() => {
+      this._persistTimers.delete(guildId);
+      this._persist(guildId).catch((err) => {
+        console.error(`[ConfigService] Persistence error for guild ${guildId}:`, err.message);
+      });
+    }, this.PERSIST_DEBOUNCE_MS);
+    this._persistTimers.set(guildId, timer);
+  }
 
   async _persist(guildId) {
     const data = this._cache.get(guildId);
@@ -230,6 +255,27 @@ export class ConfigService {
       { $set: plain },
       { upsert: true, new: true }
     );
+  }
+
+  _clearUserPersistTimer(guildId, userId) {
+    const key = `${guildId}:${userId}`;
+    const timer = this._userPersistTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this._userPersistTimers.delete(key);
+    }
+  }
+
+  _scheduleUserPersist(guildId, userId) {
+    this._clearUserPersistTimer(guildId, userId);
+    const key = `${guildId}:${userId}`;
+    const timer = setTimeout(() => {
+      this._userPersistTimers.delete(key);
+      this._persistUser(guildId, userId).catch((err) => {
+        console.error(`[ConfigService] User persistence error for ${guildId}/${userId}:`, err.message);
+      });
+    }, this.PERSIST_DEBOUNCE_MS);
+    this._userPersistTimers.set(key, timer);
   }
 
   async _persistUser(guildId, userId) {

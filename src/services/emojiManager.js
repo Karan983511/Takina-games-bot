@@ -1,5 +1,5 @@
-import emojiService from '../services/emojiService.js';
-import { DEFAULT_EMOJIS, getAllEmojiKeys, getAllCategories, getEmojisByCategory } from '../utils/defaultEmojis.js';
+import emojiService from './emojiService.js';
+import { DEFAULT_EMOJIS, getAllCategories, getEmojisByCategory } from '../utils/defaultEmojis.js';
 import { log } from '../booster/utils/logger.js';
 
 /**
@@ -13,8 +13,7 @@ export class EmojiManager {
   }
 
   /**
-   * Initialize emoji manager
-   * Sync all guilds with emoji defaults
+   * Initialize emoji manager for all cached guilds
    */
   async initialize() {
     try {
@@ -22,22 +21,22 @@ export class EmojiManager {
       for (const [guildId] of guilds) {
         await this.emojiService.syncWithDefaults(guildId);
       }
-      log('info', 'EmojiManager', `✅ Initialized emoji manager for ${guilds.size} guild(s)`);
+      log('info', 'EmojiManager', `Initialized emoji manager for ${guilds.size} guild(s)`);
     } catch (err) {
       log('error', 'EmojiManager', `Failed to initialize: ${err.message}`);
     }
   }
 
   /**
-   * Get emoji for use in messages
-   * Automatically uses custom if set, otherwise default
+   * Get emoji display string for use in messages.
+   * Automatically uses custom if set, otherwise default.
    */
   async getEmoji(guildId, emojiKey) {
     try {
       return await this.emojiService.getEmojiDisplay(guildId, emojiKey);
     } catch (err) {
       log('error', 'EmojiManager', `Failed to get emoji ${emojiKey}: ${err.message}`);
-      return DEFAULT_EMOJIS[emojiKey]?.unicode || null;
+      return DEFAULT_EMOJIS[emojiKey]?.unicode || '❓';
     }
   }
 
@@ -46,36 +45,43 @@ export class EmojiManager {
    */
   async getEmojis(guildId, ...emojiKeys) {
     const result = {};
-    for (const key of emojiKeys) {
-      result[key] = await this.getEmoji(guildId, key);
-    }
+    await Promise.all(
+      emojiKeys.map(async (key) => {
+        result[key] = await this.getEmoji(guildId, key);
+      })
+    );
     return result;
   }
 
   /**
-   * Get full emoji configuration for dashboard/display
+   * Get full emoji configuration grouped by category for dashboard/display
    */
   async getConfigForDashboard(guildId) {
     try {
       const config = await this.emojiService.getGuildEmojiConfig(guildId);
       const categories = getAllCategories();
-      
+
       const grouped = {};
       for (const category of categories) {
         grouped[category] = {};
         const emojisInCat = getEmojisByCategory(category);
-        
+
         for (const [key, emojiData] of Object.entries(emojisInCat)) {
           const custom = config[key];
           grouped[category][key] = {
             label: emojiData.label,
             default: emojiData.unicode,
-            current: custom?.isCustom ? {
-              id: custom.customId,
-              name: custom.customName,
-              server: custom.sourceServerId,
-              display: `<:${custom.customName}:${custom.customId}>`,
-            } : null,
+            current: custom?.isCustom
+              ? {
+                  id: custom.customId,
+                  name: custom.customName,
+                  server: custom.sourceServerId,
+                  display: custom.animated
+                    ? `<a:${custom.customName}:${custom.customId}>`
+                    : `<:${custom.customName}:${custom.customId}>`,
+                  animated: custom.animated,
+                }
+              : null,
             isCustom: custom?.isCustom || false,
           };
         }
@@ -91,13 +97,14 @@ export class EmojiManager {
   /**
    * Set custom emoji for a guild
    */
-  async setCustomEmoji(guildId, emojiKey, customId, customName, sourceServerId, userId) {
+  async setCustomEmoji(guildId, emojiKey, customId, customName, sourceServerId, userId, animated = false) {
     try {
-      await this.emojiService.setCustomEmoji(guildId, emojiKey, {
-        customId,
-        customName,
-        sourceServerId,
-      }, userId);
+      await this.emojiService.setCustomEmoji(
+        guildId,
+        emojiKey,
+        { customId, customName, sourceServerId, animated },
+        userId
+      );
 
       log('info', 'EmojiManager', `User ${userId} changed emoji ${emojiKey} in guild ${guildId}`);
       return true;
@@ -122,13 +129,13 @@ export class EmojiManager {
   }
 
   /**
-   * Get all emojis available from a server
+   * Get all custom emojis available from a specific server
    */
   getServerEmojis(serverId) {
     const server = this.client.guilds.cache.get(serverId);
     if (!server) return [];
 
-    return server.emojis.cache.map(emoji => ({
+    return server.emojis.cache.map((emoji) => ({
       id: emoji.id,
       name: emoji.name,
       unicode: emoji.toString(),
@@ -137,51 +144,25 @@ export class EmojiManager {
   }
 
   /**
-   * Get all servers the bot has access to (for emoji selection)
+   * Get all servers the bot has access to that have custom emojis
    */
   getAccessibleServers() {
-    return Array.from(this.client.guilds.cache.values()).map(guild => ({
-      id: guild.id,
-      name: guild.name,
-      emojiCount: guild.emojis.cache.size,
-    }));
+    return Array.from(this.client.guilds.cache.values())
+      .filter((guild) => guild.emojis.cache.size > 0)
+      .map((guild) => ({
+        id: guild.id,
+        name: guild.name,
+        emojiCount: guild.emojis.cache.size,
+      }));
   }
 
   /**
-   * Validate that a custom emoji is accessible
+   * Validate that a custom emoji is still accessible
    */
   validateCustomEmoji(customId, serverId) {
     const server = this.client.guilds.cache.get(serverId);
     if (!server) return false;
-
     return server.emojis.cache.has(customId);
-  }
-
-  /**
-   * Get available emojis for a specific category
-   */
-  async getEmojisByCategory(guildId, category) {
-    try {
-      const config = await this.emojiService.getGuildEmojiConfig(guildId);
-      const categoryEmojis = getEmojisByCategory(category);
-      
-      const result = {};
-      for (const [key, emojiData] of Object.entries(categoryEmojis)) {
-        const custom = config[key];
-        result[key] = {
-          label: emojiData.label,
-          display: custom?.isCustom 
-            ? `<:${custom.customName}:${custom.customId}>`
-            : custom?.unicode || emojiData.unicode,
-          isCustom: custom?.isCustom || false,
-        };
-      }
-
-      return result;
-    } catch (err) {
-      log('error', 'EmojiManager', `Failed to get emojis by category: ${err.message}`);
-      return {};
-    }
   }
 }
 

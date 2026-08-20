@@ -16,6 +16,7 @@ const EmojiConfigSchema = new mongoose.Schema(
         emojiKey: String,           // Reference to DEFAULT_EMOJIS key
         customId: String,           // Discord emoji ID (for custom emojis)
         customName: String,         // Custom emoji name
+         animated: { type: Boolean, default: false }, // Preserve animated custom emojis
         sourceServerId: String,     // Which server this emoji is from
         addedAt: { type: Date, default: Date.now },
         addedBy: String,            // User ID who added it

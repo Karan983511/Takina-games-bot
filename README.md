@@ -4,6 +4,7 @@ A Discord bot with two modules:
 
 - **🎲 Games** — automatically drops fun mini-games into active channels every few minutes, with a reward-role loot system.
 - **🚀 Booster Manager** — lets server boosters create custom roles (and voice channels), with admin controls for eligibility, boundaries, rotation, and logging.
+- **🎨 Emoji Configuration** — lets admins replace the bot’s built-in emojis with custom server emojis through an interactive dashboard.
 
 ---
 
@@ -43,6 +44,8 @@ Eligible members (boosters, or a custom eligibility role) can create their own c
 | `.role delete` | Permanently delete your custom role |
 | `.loot` | View and equip/unequip your unlocked reward roles |
 
+**Emoji command:** `/emoji-config` — opens the admin emoji customization dashboard.
+
 **Admin command:** `/bsetup` — a section-based dashboard covering:
 - **Overview** — active/inactive role counts, current config at a glance
 - **Features** — toggle custom roles / custom VCs on or off
@@ -55,6 +58,21 @@ Eligible members (boosters, or a custom eligibility role) can create their own c
 - **System** — general status info
 
 Custom roles automatically deactivate (and can be restored) if a member stops boosting or loses eligibility, and are cleaned up permanently after the configured retention window.
+
+
+## 🎨 Emoji Configuration
+
+Admins can use `/emoji-config` to manage the emojis used by the bot without editing code. The dashboard groups the built-in emoji registry into categories such as status, economy, games, actions, roles, communication, and navigation.
+
+From the dashboard, an administrator can:
+
+- Browse every registered bot emoji and see whether it uses the default or a custom value
+- Choose a custom emoji from any server the bot can access
+- Replace status, game, role, navigation, and other bot UI emojis
+- Reset any emoji back to its Unicode default
+- Use animated custom emojis when the source server provides one
+
+Emoji choices are stored per server in MongoDB and automatically remain available after restarts. Custom emojis must come from a server the bot is in, and Discord limits each picker to 25 choices at a time. The bot needs **Use External Emojis** permission to display custom emojis from other servers.
 
 ---
 
@@ -77,6 +95,7 @@ Build an invite URL with these permissions:
 - Embed Links
 - Read Message History
 - Use Application Commands
+- Use External Emojis *(needed for custom emoji replacements)*
 - Manage Roles *(needed for reward roles and custom booster roles)*
 - Manage Channels *(needed for custom booster voice channels)*
 - Connect / Move Members *(needed for custom booster voice channels)*
@@ -142,7 +161,8 @@ takina-games/
 │   ├── app.js                       # Entry point / Discord client / MongoDB connect
 │   ├── commands/
 │   │   ├── setup.js                 # /setup — games dashboard
-│   │   └── bsetup.js                # /bsetup — booster manager dashboard
+│   │   ├── bsetup.js                # /bsetup — booster manager dashboard
+│   │   └── emojiConfig.js           # /emoji-config — emoji customization dashboard
 │   ├── events/
 │   │   ├── ready.js
 │   │   ├── messageCreate.js         # Routes .help / .role / .loot + forwards to game scheduler
@@ -166,9 +186,14 @@ takina-games/
 │   ├── handlers/
 │   │   ├── commandLoader.js
 │   │   ├── eventLoader.js
+│   │   ├── emojiHandler.js          # Emoji dashboard buttons and select menus
 │   │   └── gameScheduler.js         # Auto-game timer + channel picker
 │   ├── services/
-│   │   └── configService.js         # MongoDB-backed guild config storage
+│   │   ├── configService.js         # MongoDB-backed guild config storage
+│   │   ├── emojiManager.js          # Emoji lookup and custom emoji access
+│   │   └── emojiService.js          # MongoDB emoji persistence and caching
+│   ├── utils/
+│   │   └── defaultEmojis.js         # Built-in emoji registry
 │   └── booster/                     # Booster Manager module
 │       ├── index.js                 # Module init — starts cleanup + rotation services
 │       ├── commands/
@@ -190,7 +215,7 @@ takina-games/
 │       │   ├── backupService.js
 │       │   ├── settingsService.js
 │       │   └── discordRoleColorApi.js
-│       ├── models/                  # Mongoose schemas (BoosterRole, BoosterVC, BoosterSettings, etc.)
+│       ├── models/                  # Mongoose schemas (including EmojiConfig)
 │       └── utils/
 ├── data/
 │   └── config.json                  # Legacy/local fallback — primary storage is MongoDB
@@ -218,4 +243,5 @@ takina-games/
 - The WYR game is the only non-competitive one — everyone can vote and results are shown after 20 seconds.
 - Only one game runs at a time per server.
 - Custom booster roles/VCs are automatically deactivated (not deleted) when a member stops boosting or loses eligibility, and permanently cleaned up after the configured retention period.
-- Booster module commands use a `.` prefix (e.g. `.role setup`, `.loot`) rather than slash commands, except for admin config (`/bsetup`).
+- Booster module commands use a `.` prefix (e.g. `.role setup`, `.loot`) rather than slash commands, except for admin config (`/bsetup`) and emoji config (`/emoji-config`).
+- Emoji configuration is server-specific; changing an emoji in one guild does not affect another guild.

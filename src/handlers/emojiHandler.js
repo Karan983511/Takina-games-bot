@@ -6,7 +6,15 @@ import {
   buildMainPanel,
 } from '../commands/emojiConfig.js';
 import { getAllCategories } from '../utils/defaultEmojis.js';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  EmbedBuilder,
+} from 'discord.js';
 
 /**
  * Emoji Interaction Handler
@@ -79,10 +87,81 @@ export async function handleEmojiInteraction(interaction) {
         });
       }
 
-      const panel = buildServerEmojiPicker(emojiKey, selectedServer.name, serverEmojis);
+      const panel = buildServerEmojiPicker(emojiKey, selectedServer.name, serverEmojis, 0, selectedServerId);
       return interaction.update({
         embeds: [panel.embed],
         components: [panel.emojiSelectRow, panel.buttonRow],
+      });
+    }
+
+    // ── Page prev/next through a server's emoji list ────────────────────
+    if (customId.startsWith('emoji_page_prev_') || customId.startsWith('emoji_page_next_')) {
+      const direction = customId.startsWith('emoji_page_prev_') ? -1 : 1;
+      const prefix = direction === -1 ? 'emoji_page_prev_' : 'emoji_page_next_';
+      const [emojiKey, serverId, pageStr] = customId.replace(prefix, '').split('::');
+
+      const server = emojiManager.getAccessibleServers().find((s) => s.id === serverId);
+      if (!server) {
+        return interaction.reply({ content: '❌ Server not found', ephemeral: true });
+      }
+
+      const serverEmojis = emojiManager.getServerEmojis(serverId);
+      const nextPage = parseInt(pageStr, 10) + direction;
+
+      const panel = buildServerEmojiPicker(emojiKey, server.name, serverEmojis, nextPage, serverId);
+      return interaction.update({
+        embeds: [panel.embed],
+        components: [panel.emojiSelectRow, panel.buttonRow],
+      });
+    }
+
+    // ── Open search modal ────────────────────────────────────────────────
+    if (customId.startsWith('emoji_search_')) {
+      const [emojiKey, serverId] = customId.replace('emoji_search_', '').split('::');
+
+      const modal = new ModalBuilder()
+        .setCustomId(`emoji_searchmodal_${emojiKey}::${serverId}`)
+        .setTitle('Search emoji by name')
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId('emoji_search_query')
+              .setLabel('Emoji name (or part of it)')
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMinLength(1)
+              .setMaxLength(100)
+          )
+        );
+
+      return interaction.showModal(modal);
+    }
+
+    // ── Search modal submitted ───────────────────────────────────────────
+    if (customId.startsWith('emoji_searchmodal_')) {
+      const [emojiKey, serverId] = customId.replace('emoji_searchmodal_', '').split('::');
+      const query = interaction.fields.getTextInputValue('emoji_search_query').trim().toLowerCase();
+
+      const server = emojiManager.getAccessibleServers().find((s) => s.id === serverId);
+      if (!server) {
+        return interaction.reply({ content: '❌ Server not found', ephemeral: true });
+      }
+
+      const allEmojis = emojiManager.getServerEmojis(serverId);
+      const matches = allEmojis.filter((e) => e.name.toLowerCase().includes(query));
+
+      if (matches.length === 0) {
+        return interaction.reply({
+          content: `❌ No emojis matching **${query}** found in ${server.name}.`,
+          ephemeral: true,
+        });
+      }
+
+      const panel = buildServerEmojiPicker(emojiKey, `${server.name} (search: "${query}")`, matches, 0, serverId);
+      return interaction.reply({
+        embeds: [panel.embed],
+        components: [panel.emojiSelectRow, panel.buttonRow],
+        ephemeral: true,
       });
     }
 
@@ -130,9 +209,22 @@ export async function handleEmojiInteraction(interaction) {
       );
 
       return interaction.update({
-        content: `✅ Successfully set **${emojiKey}** to ${selectedEmoji.unicode}`,
-        embeds: [],
-        components: [],
+        content: null,
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setDescription(`✅ **${emojiKey}** is now set to ${selectedEmoji.unicode} \`${selectedEmoji.name}\``)
+            .setFooter({ text: 'The change is live immediately' }),
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('emoji_back')
+              .setLabel('Back to Categories')
+              .setEmoji('⬅️')
+              .setStyle(ButtonStyle.Secondary)
+          ),
+        ],
       });
     }
 
@@ -142,9 +234,21 @@ export async function handleEmojiInteraction(interaction) {
       await emojiManager.removeCustomEmoji(guildId, emojiKey);
 
       return interaction.update({
-        content: `✅ Reset **${emojiKey}** to default emoji`,
-        embeds: [],
-        components: [],
+        content: null,
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setDescription(`✅ **${emojiKey}** has been reset to its default emoji.`),
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('emoji_back')
+              .setLabel('Back to Categories')
+              .setEmoji('⬅️')
+              .setStyle(ButtonStyle.Secondary)
+          ),
+        ],
       });
     }
 

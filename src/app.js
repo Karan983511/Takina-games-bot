@@ -29,6 +29,10 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
+    // Required for guild.emojis.cache to populate — without this the bot
+    // never receives custom emoji data from any server, including ones
+    // it's already in.
+    GatewayIntentBits.GuildExpressions,
   ],
 });
 

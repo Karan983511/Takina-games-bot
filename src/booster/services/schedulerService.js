@@ -21,10 +21,11 @@ async function tick() {
     try {
       const settings = await BoosterSettings.findOne({ guildId: guild.id });
       if (!settings) continue;
-      if (settings.features.weeklyRotation && settings.rotation.enabled) {
+      // FIX: optional chaining to prevent crash when features/rotation subdocs are missing
+      if (settings.features?.weeklyRotation && settings.rotation?.enabled) {
         if (!settings.rotation.nextRun || now >= settings.rotation.nextRun) await runRotation(guild, settings);
       }
-      if (settings.features.featuredVoting) {
+      if (settings.features?.featuredVoting) {
         const session = await VoteSession.findOne({ guildId: guild.id, active: true });
         if (session && now >= session.endsAt) {
           await endVoteSession(guild, session);
@@ -55,7 +56,8 @@ async function runRotation(guild, settings) {
     const pos = await getInsertPosition(guild);
     await guild.roles.setPositions([{ role: pick.roleId, position: pos }]).catch(() => {});
     await FeaturedHistory.create({ guildId: guild.id, roleId: pick.roleId, userId: pick.userId, roleName: pick.name, wonByVote: false });
-    const intervalDays = settings.rotation.interval || 7;
+    // FIX: optional chaining for rotation interval
+    const intervalDays = settings.rotation?.interval || 7;
     settings.rotation.lastRun = new Date();
     settings.rotation.nextRun = new Date(Date.now() + intervalDays * 24 * 60 * 60 * 1000);
     await settings.save();

@@ -30,6 +30,16 @@ export class GameScheduler {
     if (c) { clearTimeout(c); this.cooldowns.delete(guildId); }
   }
 
+  /**
+   * Clean up all state for a guild (called on guild leave)
+   */
+  cleanupGuild(guildId) {
+    this.stopGuild(guildId);
+    this.active.delete(guildId);
+    this.msgRefQueue.delete(guildId);
+    console.log(`[GameScheduler] Cleaned up state for guild ${guildId}`);
+  }
+
   startAll() {
     for (const guild of this.client.guilds.cache.values()) {
       const cfg = this.client.config.get(guild.id);
@@ -97,18 +107,27 @@ export class GameScheduler {
     const queue = this.msgRefQueue.get(guildId) ?? [];
     if (queue.length >= 2) {
       const oldest = queue.shift();
-      // Fire-and-forget: don't await deletion so the new game sends immediately
+      // Fire-and-forget parallel deletion with Promise.all
       (async () => {
         try {
           const prevCh = guild.channels.cache.get(oldest.channelId);
           if (prevCh) {
-            const prevMsg = await prevCh.messages.fetch(oldest.messageId).catch(() => null);
-            if (prevMsg) await prevMsg.delete().catch(() => {});
-            // Also delete any tracked reply messages (WYR results, etc.)
-            for (const rid of (oldest.replyIds ?? [])) {
-              const rMsg = await prevCh.messages.fetch(rid).catch(() => null);
-              if (rMsg) await rMsg.delete().catch(() => {});
+            // Fetch message and reply messages in parallel
+            const [prevMsg, ...replyMsgs] = await Promise.allSettled([
+              prevCh.messages.fetch(oldest.messageId).catch(() => null),
+              ...(oldest.replyIds ?? []).map(rid => prevCh.messages.fetch(rid).catch(() => null)),
+            ]);
+
+            // Delete main message if it exists
+            if (prevMsg.status === 'fulfilled' && prevMsg.value) {
+              await prevMsg.value.delete().catch(() => {});
             }
+
+            // Delete reply messages in parallel
+            const deletionPromises = replyMsgs
+              .filter(msg => msg.status === 'fulfilled' && msg.value)
+              .map(msg => msg.value.delete().catch(() => {}));
+            await Promise.all(deletionPromises);
           }
         } catch { /* ignore — message already deleted or missing */ }
       })();
@@ -219,7 +238,7 @@ export class GameScheduler {
       return;
     }
 
-    // ── Win ──────────────────────────────────────────────────────────────────
+    // ── Win ───────────────────────────────────────────────────────────
     if (winner) {
       const winEmbed    = def.win(winner.toString(), state.game);
       let grantedRoleId = null;
@@ -251,7 +270,7 @@ export class GameScheduler {
         }
       } catch { /* ignore */ }
 
-    // ── Timeout ───────────────────────────────────────────────────────────────
+    // ── Timeout ─────────────────────────────────────────────────────────
     } else {
       try {
         const isButtonGame = state.gameKey in BUTTON_GAMES;
@@ -316,7 +335,7 @@ export class GameScheduler {
       return;
     }
 
-    // ── WYR: cast vote ────────────────────────────────────────────────────────
+    // ── WYR: cast vote ───────────────────────────────────────────────────────
     if (def.isWyr && def.isVote(customId)) {
       def.voteFor(state.game, interaction.user.id, customId);
       try {

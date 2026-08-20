@@ -18,7 +18,16 @@ export class EmojiManager {
   async initialize() {
     try {
       const guilds = this.client.guilds.cache;
-      for (const [guildId] of guilds) {
+      for (const [guildId, guild] of guilds) {
+        // Force-fetch emojis rather than trusting the gateway cache — this
+        // guarantees guild.emojis.cache is actually populated, even for
+        // guilds joined while the bot was offline or where the initial
+        // gateway payload was incomplete.
+        try {
+          await guild.emojis.fetch();
+        } catch (err) {
+          log('error', 'EmojiManager', `Failed to fetch emojis for ${guild.name}: ${err.message}`);
+        }
         await this.emojiService.syncWithDefaults(guildId);
       }
       log('info', 'EmojiManager', `Initialized emoji manager for ${guilds.size} guild(s)`);
